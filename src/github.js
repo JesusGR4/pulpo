@@ -289,7 +289,7 @@ async function prConversation(repoFullName, number) {
            comments(first: 60) { totalCount nodes { author { login avatarUrl } bodyHTML createdAt } }
            reviewThreads(first: 60) {
              nodes {
-               path line startLine isResolved isOutdated
+               id path line startLine isResolved isOutdated viewerCanResolve viewerCanUnresolve
                comments(first: 20) { nodes { databaseId author { login avatarUrl } bodyHTML createdAt } }
              }
            }
@@ -317,6 +317,22 @@ async function addInlineComment(repoFullName, number, { body, commitId, path, si
 
 async function replyToThread(repoFullName, number, commentDatabaseId, body) {
   return rest("POST", `/repos/${repoFullName}/pulls/${number}/comments/${commentDatabaseId}/replies`, { body });
+}
+
+/** Resuelve o reabre un hilo de review (mutations de GraphQL sobre el node id del hilo). */
+async function setThreadResolved(threadId, resolved) {
+  if (resolved) {
+    const data = await gql(
+      `mutation ($id: ID!) { resolveReviewThread(input: { threadId: $id }) { thread { id isResolved } } }`,
+      { id: threadId },
+    );
+    return data.resolveReviewThread.thread;
+  }
+  const data = await gql(
+    `mutation ($id: ID!) { unresolveReviewThread(input: { threadId: $id }) { thread { id isResolved } } }`,
+    { id: threadId },
+  );
+  return data.unresolveReviewThread.thread;
 }
 
 /**
@@ -439,6 +455,7 @@ module.exports = {
   addIssueComment,
   addInlineComment,
   replyToThread,
+  setThreadResolved,
   submitReview,
   dismissReview,
   createBranch,

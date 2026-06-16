@@ -14,8 +14,34 @@
 
 const { spawn } = require("child_process");
 const { execFileSync } = require("child_process");
+const config = require("./config");
 
-const MODEL = "claude-opus-4-8";
+/**
+ * Catálogo de modelos para la review. Los IDs valen tal cual para los dos
+ * backends (API y `claude --model`). `efforts` lista los niveles que ese
+ * modelo acepta en output_config.effort / --effort; vacío = no soportado
+ * (Haiku tampoco soporta thinking adaptativo, así que se omite ahí).
+ */
+const AI_MODELS = {
+  "claude-opus-4-8": { label: "Claude Opus 4.8", efforts: ["low", "medium", "high", "xhigh", "max"] },
+  "claude-sonnet-4-6": { label: "Claude Sonnet 4.6", efforts: ["low", "medium", "high", "max"] },
+  "claude-haiku-4-5": { label: "Claude Haiku 4.5", efforts: [] },
+};
+const DEFAULT_MODEL = "claude-opus-4-8";
+const DEFAULT_EFFORT = "high";
+const ALL_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+
+/** Modelo + esfuerzo efectivos: lo configurado, saneado contra el catálogo. */
+function aiSettings() {
+  const cfg = config.load();
+  const model = AI_MODELS[cfg.aiModel] ? cfg.aiModel : DEFAULT_MODEL;
+  const efforts = AI_MODELS[model].efforts;
+  const effort = efforts.includes(cfg.aiEffort)
+    ? cfg.aiEffort
+    : efforts.includes(DEFAULT_EFFORT) ? DEFAULT_EFFORT : null;
+  return { model, effort };
+}
+
 const MAX_DIFF_CHARS = 70_000;
 const CLI_TIMEOUT_MS = 12 * 60 * 1000;
 // Sin MCP servers ni persistencia de sesión: arranque más rápido y sin tocar
@@ -97,16 +123,20 @@ function buildDiffText(files) {
 
 /* ---------- backend 1: SDK oficial (requiere ANTHROPIC_API_KEY) ---------- */
 
-async function generateViaSdk(prompt) {
+async function generateViaSdk(prompt, model, effort) {
   const Anthropic = require("@anthropic-ai/sdk").default;
   const client = new Anthropic();
-  const response = await client.messages.create({
-    model: MODEL,
+  const request = {
+    model,
     max_tokens: 16000,
-    thinking: { type: "adaptive" },
     output_config: { format: { type: "json_schema", schema: REVIEW_SCHEMA } },
     messages: [{ role: "user", content: prompt }],
-  });
+  };
+  if (AI_MODELS[model].efforts.length) {
+    request.thinking = { type: "adaptive" };
+    if (effort) request.output_config.effort = effort;
+  }
+  const response = await client.messages.create(request);
   const text = response.content.find((block) => block.type === "text")?.text;
   if (!text) throw new Error("Empty response from the Anthropic API");
   return JSON.parse(text);
@@ -122,9 +152,11 @@ function claudeCliPath() {
   }
 }
 
-function generateViaCli(prompt, cliPath) {
+function generateViaCli(prompt, cliPath, model, effort) {
+  const args = [...CLI_ARGS, "--model", model];
+  if (effort) args.push("--effort", effort);
   return new Promise((resolve, reject) => {
-    const child = spawn(cliPath, CLI_ARGS, { stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(cliPath, args, { stdio: ["pipe", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     let timedOut = false;
@@ -180,12 +212,13 @@ async function generateReview({ title, body, files }) {
   if (!diffText) throw new Error("La PR no tiene diff revisable (¿binarios?)");
   const prompt = buildPrompt({ title, body, diffText, truncated });
 
+  const { model, effort } = aiSettings();
   if (process.env.ANTHROPIC_API_KEY) {
-    return { review: normalize(await generateViaSdk(prompt)), backend: "anthropic-sdk" };
+    return { review: normalize(await generateViaSdk(prompt, model, effort)), backend: "anthropic-sdk", model, effort };
   }
   const cliPath = claudeCliPath();
   if (cliPath) {
-    return { review: normalize(await generateViaCli(prompt, cliPath)), backend: "claude-cli" };
+    return { review: normalize(await generateViaCli(prompt, cliPath, model, effort)), backend: "claude-cli", model, effort };
   }
   throw new Error(
     "Sin backend de IA: exporta ANTHROPIC_API_KEY o instala/loguea el CLI de Claude Code (`claude`).",
@@ -204,8 +237,14 @@ function normalize(review) {
 
 /** Estado del backend de IA, para onboarding y ajustes. */
 function backendStatus() {
+  const { model, effort } = aiSettings();
+  const base = {
+    model,
+    effort,
+    models: Object.entries(AI_MODELS).map(([id, m]) => ({ id, label: m.label, efforts: m.efforts })),
+  };
   if (process.env.ANTHROPIC_API_KEY) {
-    return { backend: "anthropic-sdk", detail: "ANTHROPIC_API_KEY presente — SDK oficial (claude-opus-4-8)" };
+    return { ...base, backend: "anthropic-sdk", detail: "ANTHROPIC_API_KEY presente — SDK oficial" };
   }
   const cliPath = claudeCliPath();
   if (cliPath) {
@@ -215,24 +254,27 @@ function backendStatus() {
     } catch {
       /* la versión es decorativa */
     }
-    return { backend: "claude-cli", detail: `Claude Code CLI en ${cliPath}${version ? ` (${version})` : ""}` };
+    return { ...base, backend: "claude-cli", detail: `Claude Code CLI en ${cliPath}${version ? ` (${version})` : ""}` };
   }
-  return { backend: null, detail: "Sin backend: exporta ANTHROPIC_API_KEY o instala Claude Code y haz login" };
+  return { ...base, backend: null, detail: "Sin backend: exporta ANTHROPIC_API_KEY o instala Claude Code y haz login" };
 }
 
 /** Prueba ligera del backend (para el botón "Probar IA" de Ajustes). */
 async function ping() {
   const status = backendStatus();
   if (!status.backend) return { ...status, ok: false };
+  const { model, effort } = aiSettings();
   try {
     if (status.backend === "anthropic-sdk") {
       const Anthropic = require("@anthropic-ai/sdk").default;
-      await new Anthropic().models.retrieve(MODEL);
+      await new Anthropic().models.retrieve(model);
       return { ...status, ok: true };
     }
     const result = await generateViaCli(
       'Reply with ONLY this JSON and nothing else: {"ok": true}',
       claudeCliPath(),
+      model,
+      effort,
     );
     return { ...status, ok: result.ok === true };
   } catch (err) {
@@ -240,4 +282,12 @@ async function ping() {
   }
 }
 
-module.exports = { generateReview, backendStatus, ping };
+function isAiModel(id) {
+  return Boolean(AI_MODELS[id]);
+}
+
+function isAiEffort(level) {
+  return ALL_EFFORTS.includes(level);
+}
+
+module.exports = { generateReview, backendStatus, ping, isAiModel, isAiEffort };

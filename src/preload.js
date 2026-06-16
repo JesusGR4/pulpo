@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld("pulpo", {
   commentInline: (repo, number, comment) => ipcRenderer.invoke("pr:commentInline", { repo, number, comment }),
   replyThread: (repo, number, commentDatabaseId, body) =>
     ipcRenderer.invoke("pr:replyThread", { repo, number, commentDatabaseId, body }),
+  resolveThread: (threadId, resolved) => ipcRenderer.invoke("pr:resolveThread", { threadId, resolved }),
   submitReview: (repo, number, review) => ipcRenderer.invoke("pr:submitReview", { repo, number, review }),
   dismissReview: (repo, number, reviewId, message) =>
     ipcRenderer.invoke("pr:dismissReview", { repo, number, reviewId, message }),

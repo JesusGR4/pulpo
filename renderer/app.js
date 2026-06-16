@@ -143,9 +143,12 @@ function draftCard(draft) {
         </div>
       </div>`;
   }
+  const aiMeta = draft.ai && draft.aiModel
+    ? ` · ${esc(draft.aiModel)}${draft.aiEffort ? ` · esfuerzo ${esc(draft.aiEffort)}` : ""}`
+    : "";
   return `
     <div class="draft-card ${draft.ai ? "ai" : ""}" data-draft="${draft.id}">
-      <div class="draft-head">${draft.ai ? "🤖 BORRADOR (IA)" : "📝 BORRADOR"} <span class="muted">· ${where}</span>
+      <div class="draft-head">${draft.ai ? "🤖 BORRADOR (IA)" : "📝 BORRADOR"} <span class="muted">· ${where}${aiMeta}</span>
         <button class="draft-edit" title="Editar borrador">✏️</button>
         <button class="draft-pub" title="Publicar solo este borrador en GitHub">↗ Publicar</button>
         <button class="draft-del" title="Eliminar borrador">🗑</button>
@@ -166,7 +169,7 @@ async function generateAiReview(pr) {
       ? state.files
       : await window.pulpo.prFiles(repoKey.split("#")[0], pr.number);
     if (state.selected === pr.number) state.files = files;
-    const { review, backend } = await window.pulpo.aiReview(pr.title, pr.body || "", files);
+    const { review, backend, model, effort } = await window.pulpo.aiReview(pr.title, pr.body || "", files);
 
     const anchors = new Set();
     for (const file of files) {
@@ -185,6 +188,8 @@ async function generateAiReview(pr) {
           createdAt: new Date().toISOString(),
           kind: "inline",
           ai: true,
+          aiModel: model,
+          aiEffort: effort || null,
           path: comment.path,
           side: comment.side,
           line: comment.line,
@@ -208,6 +213,8 @@ async function generateAiReview(pr) {
         createdAt: new Date().toISOString(),
         kind: "general",
         ai: true,
+        aiModel: model,
+        aiEffort: effort || null,
         body: summaryParts.join("\n\n---\n\n"),
       });
     }
@@ -223,7 +230,7 @@ async function generateAiReview(pr) {
       state.draftKeys = new Set(await window.pulpo.draftsKeys());
       renderList();
     }
-    toast(`IA (${backend}): ${newDrafts.length - (summaryParts.length ? 1 : 0)} comentario(s) en línea + resumen, en borradores de #${pr.number}`, "ok");
+    toast(`IA (${backend} · ${model}${effort ? ` · ${effort}` : ""}): ${newDrafts.length - (summaryParts.length ? 1 : 0)} comentario(s) en línea + resumen, en borradores de #${pr.number}`, "ok");
   } catch (err) {
     toast(`Review con IA falló: ${String(err.message || err)}`, "err");
   } finally {
@@ -701,6 +708,7 @@ async function openDetail(number, tab = "conv", repoOverride = null) {
     // seed visual para capturas de selftest: no se persiste
     if (IS_SELFTEST && new URLSearchParams(location.search).get("seed_draft") === "1" && !state.drafts.length) {
       state.drafts.push({ id: "seed", kind: "general", body: "Esto es un borrador local: no está en GitHub.", createdAt: new Date().toISOString() });
+      state.drafts.push({ id: "seed-ai", kind: "general", ai: true, aiModel: "claude-opus-4-8", aiEffort: "high", body: "AI draft seeded for screenshots.", createdAt: new Date().toISOString() });
     }
   } catch (err) {
     detailContent.innerHTML = `<div class="detail-inner"><div class="error-box">${esc(String(err.message || err))}</div></div>`;
@@ -902,6 +910,11 @@ function threadsByAnchor() {
 function threadBlock(thread) {
   const comments = thread.comments?.nodes || [];
   const first = comments[0];
+  const resolveBtn = !thread.id
+    ? ""
+    : thread.isResolved
+      ? (thread.viewerCanUnresolve ? `<button class="btn thread-resolve" data-resolve-id="${esc(thread.id)}" data-resolved="false" title="Reabre la conversación en GitHub">↺ Reabrir</button>` : "")
+      : (thread.viewerCanResolve ? `<button class="btn thread-resolve resolve-ok" data-resolve-id="${esc(thread.id)}" data-resolved="true" title="Marca la conversación como resuelta en GitHub">✓ Resolver</button>` : "");
   return `
     <div class="thread ${thread.isResolved ? "resolved" : ""}">
       ${thread.isResolved ? `<div class="thread-tag">✓ Resuelto</div>` : ""}
@@ -909,6 +922,7 @@ function threadBlock(thread) {
       <div class="thread-reply">
         <textarea rows="2" placeholder="Responder…"></textarea>
         <button class="btn" data-reply="${first?.databaseId ?? ""}">Responder</button>
+        ${resolveBtn}
       </div>
     </div>`;
 }
@@ -960,19 +974,54 @@ function renderChangesTab() {
 
   const { map: anchored, orphans } = threadsByAnchor();
   const statusIcon = { added: "🟢", removed: "🔴", modified: "🟡", renamed: "🔵" };
+
+  // Comentarios (hilos de GitHub) y borradores locales por fichero, para el índice lateral.
+  const commentsPerFile = new Map();
+  const unresolvedPerFile = new Map();
+  for (const thread of state.conversation?.reviewThreads?.nodes || []) {
+    const count = thread.comments?.nodes?.length || 0;
+    commentsPerFile.set(thread.path, (commentsPerFile.get(thread.path) || 0) + count);
+    if (!thread.isResolved) unresolvedPerFile.set(thread.path, (unresolvedPerFile.get(thread.path) || 0) + count);
+  }
+  const draftsPerFile = new Map();
+  for (const draft of state.drafts) {
+    if (draft.kind === "inline") draftsPerFile.set(draft.path, (draftsPerFile.get(draft.path) || 0) + 1);
+  }
+
+  const navRows = files
+    .map((file, fi) => {
+      const comments = commentsPerFile.get(file.filename) || 0;
+      const unresolved = unresolvedPerFile.get(file.filename) || 0;
+      const draftCount = draftsPerFile.get(file.filename) || 0;
+      return `
+      <button class="file-nav-row" data-target="diff-f${fi}" title="${esc(file.filename)}">
+        <span class="status-ico">${statusIcon[file.status] || "⚪"}</span>
+        <span class="file-nav-name">${esc(file.filename)}</span>
+        ${comments ? `<span class="file-nav-badge badge-comments ${unresolved ? "" : "all-resolved"}" title="${unresolved ? `${unresolved} comentario(s) sin resolver` : "Todos los hilos resueltos"}">💬 ${comments}</span>` : ""}
+        ${draftCount ? `<span class="file-nav-badge badge-drafts" title="${draftCount} borrador(es) local(es)">📝 ${draftCount}</span>` : ""}
+      </button>`;
+    })
+    .join("");
+
   $("#tab-body").innerHTML = `
-    <div class="diff-summary muted">${files.length} ficheros ·
-      <span class="checks-success">+${files.reduce((s, f) => s + f.additions, 0)}</span> /
-      <span class="checks-failure">−${files.reduce((s, f) => s + f.deletions, 0)}</span>
-    </div>
+    <div class="changes-layout">
+      <nav class="file-nav">
+        <div class="file-nav-h">Ficheros (${files.length}) ·
+          <span class="checks-success">+${files.reduce((s, f) => s + f.additions, 0)}</span>/<span class="checks-failure">−${files.reduce((s, f) => s + f.deletions, 0)}</span>
+        </div>
+        ${navRows}
+      </nav>
+      <div class="changes-body">
     ${files
       .map((file, fi) => {
         const orphanThreads = (orphans.get(file.filename) || []).map(threadBlock).join("");
+        const comments = commentsPerFile.get(file.filename) || 0;
         return `
-        <details class="diff-file" ${fi < 6 ? "open" : ""}>
+        <details class="diff-file" id="diff-f${fi}" ${fi < 6 ? "open" : ""}>
           <summary>
             <span class="status-ico">${statusIcon[file.status] || "⚪"}</span>
             <span class="diff-path">${esc(file.previousFilename ? `${file.previousFilename} → ` : "")}${esc(file.filename)}</span>
+            ${comments ? `<span class="file-nav-badge badge-comments">💬 ${comments}</span>` : ""}
             <span class="muted"><span class="checks-success">+${file.additions}</span> / <span class="checks-failure">−${file.deletions}</span></span>
           </summary>
           ${file.patch
@@ -981,7 +1030,21 @@ function renderChangesTab() {
           ${orphanThreads ? `<div class="orphan-threads"><div class="section-h">Hilos en versiones anteriores</div>${orphanThreads}</div>` : ""}
         </details>`;
       })
-      .join("")}`;
+      .join("")}
+      </div>
+    </div>`;
+
+  // índice lateral: saltar al fichero (abriendo su diff)
+  $("#tab-body").querySelectorAll(".file-nav-row").forEach((row) =>
+    row.addEventListener("click", () => {
+      const target = document.getElementById(row.dataset.target);
+      if (!target) return;
+      target.open = true;
+      target.scrollIntoView({ behavior: "smooth", block: "start" });
+      $("#tab-body").querySelectorAll(".file-nav-row").forEach((r) => r.classList.remove("active"));
+      row.classList.add("active");
+    }),
+  );
 
   // comentar en línea
   $("#tab-body").querySelectorAll(".add-comment").forEach((btn) =>
@@ -1001,10 +1064,26 @@ function renderChangesTab() {
       try {
         await window.pulpo.replyThread(detailRepo(), state.detailPR.number, Number(btn.dataset.reply), body);
         toast("Respuesta publicada", "ok");
-        state.conversation = await window.pulpo.prConversation(state.repo, state.detailPR.number);
+        state.conversation = await window.pulpo.prConversation(detailRepo(), state.detailPR.number);
         renderChangesTab();
       } catch (err) {
         toast(`No se pudo responder: ${String(err.message || err)}`, "err");
+        btn.disabled = false;
+      }
+    }),
+  );
+  // resolver / reabrir hilos
+  $("#tab-body").querySelectorAll(".thread-resolve").forEach((btn) =>
+    btn.addEventListener("click", async () => {
+      const resolved = btn.dataset.resolved === "true";
+      btn.disabled = true;
+      try {
+        await window.pulpo.resolveThread(btn.dataset.resolveId, resolved);
+        toast(resolved ? "Conversación resuelta ✓" : "Conversación reabierta", "ok");
+        state.conversation = await window.pulpo.prConversation(detailRepo(), state.detailPR.number);
+        renderChangesTab();
+      } catch (err) {
+        toast(`No se pudo ${resolved ? "resolver" : "reabrir"}: ${String(err.message || err)}`, "err");
         btn.disabled = false;
       }
     }),
@@ -1766,6 +1845,11 @@ function openSettings() {
       <div class="settings-card">
         <h4>IA (Review con IA 🤖)</h4>
         <p class="muted" id="ai-status-line">Comprobando backend…</p>
+        <div class="add-repo">
+          <select id="ai-model" disabled><option>Cargando modelos…</option></select>
+          <select id="ai-effort" disabled></select>
+        </div>
+        <p class="muted">Modelo y esfuerzo se aplican a cada review (API directa o CLI de Claude Code). Cada borrador queda etiquetado con lo que lo generó.</p>
         <button class="btn" id="test-ai">Probar conexión con Claude</button>
       </div>
       <div class="settings-card">
@@ -1881,6 +1965,42 @@ function openSettings() {
     if (line) line.innerHTML = s.backend
       ? `✓ <b>${esc(s.backend)}</b> — ${esc(s.detail)}`
       : `✗ ${esc(s.detail)}`;
+
+    const modelSel = $("#ai-model");
+    const effortSel = $("#ai-effort");
+    if (!modelSel || !effortSel || !Array.isArray(s.models)) return;
+    let currentEffort = s.effort;
+    const renderEfforts = (modelId) => {
+      const info = s.models.find((m) => m.id === modelId);
+      if (!info || !info.efforts.length) {
+        effortSel.innerHTML = `<option value="">esfuerzo: no aplicable</option>`;
+        effortSel.disabled = true;
+        return;
+      }
+      const selected = info.efforts.includes(currentEffort) ? currentEffort : "high";
+      effortSel.innerHTML = info.efforts
+        .map((e) => `<option value="${e}" ${e === selected ? "selected" : ""}>esfuerzo: ${e}</option>`)
+        .join("");
+      effortSel.disabled = false;
+    };
+    modelSel.innerHTML = s.models
+      .map((m) => `<option value="${esc(m.id)}" ${m.id === s.model ? "selected" : ""}>${esc(m.label)}</option>`)
+      .join("");
+    modelSel.disabled = false;
+    renderEfforts(s.model);
+    modelSel.addEventListener("change", async () => {
+      renderEfforts(modelSel.value);
+      const payload = { aiModel: modelSel.value };
+      if (effortSel.value) payload.aiEffort = effortSel.value;
+      state.config = await window.pulpo.setConfig(payload);
+      toast(`Review con IA: ${modelSel.value}${effortSel.value ? ` · esfuerzo ${effortSel.value}` : ""}`, "ok");
+    });
+    effortSel.addEventListener("change", async () => {
+      if (!effortSel.value) return;
+      currentEffort = effortSel.value;
+      state.config = await window.pulpo.setConfig({ aiEffort: effortSel.value });
+      toast(`Review con IA: esfuerzo ${effortSel.value}`, "ok");
+    });
   }).catch(() => {});
   $("#test-ai").addEventListener("click", async () => {
     const btn = $("#test-ai");

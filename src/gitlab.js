@@ -169,7 +169,9 @@ function mapReviews(mr, approvals) {
   const approvedBy = approvals?.approved_by || [];
   const approvedLogins = new Set(approvedBy.map((a) => a.user?.username));
   const latestReviews = {
-    nodes: approvedBy.map((a) => ({ author: mapUser(a.user), state: "APPROVED" })),
+    // databaseId (id de usuario) sólo para que el renderer sepa que la review es "desaprobable";
+    // dismissReview en GitLab no lo usa (unapprove actúa sobre la MR, no sobre una review).
+    nodes: approvedBy.map((a) => ({ databaseId: a.user?.id || null, author: mapUser(a.user), state: "APPROVED" })),
   };
   // Reviewers asignados que aún no han aprobado = revisión pendiente.
   const reviewRequests = {
@@ -392,6 +394,10 @@ async function prConversation(repoFullName, number) {
     if (positioned) {
       const pos = notes[0].position;
       reviewThreads.push({
+        // id propio (glthread:) para resolver/reabrir la discussion vía setThreadResolved.
+        id: `glthread:${encodeURIComponent(repoFullName)}#${number}#${encodeURIComponent(d.id)}`,
+        viewerCanResolve: true,
+        viewerCanUnresolve: true,
         path: pos.new_path || pos.old_path,
         line: pos.new_line ?? pos.old_line,
         startLine: pos.line_range?.start?.new_line ?? null,
@@ -422,6 +428,18 @@ async function prConversation(repoFullName, number) {
 
 async function addIssueComment(repoFullName, number, body) {
   return api("POST", `/projects/${proj(repoFullName)}/merge_requests/${number}/notes`, { body });
+}
+
+/** Resuelve/reabre una discussion de la MR (equivalente GitLab del resolve thread de GitHub). */
+async function setThreadResolved(threadId, resolved) {
+  const m = /^glthread:([^#]+)#(\d+)#(.+)$/.exec(threadId || "");
+  if (!m) throw new Error(`id de hilo GitLab no válido: ${threadId}`);
+  return api("PUT", `/projects/${m[1]}/merge_requests/${m[2]}/discussions/${m[3]}`, { resolved });
+}
+
+/** "Quitar aprobación": GitLab no tiene dismissal de reviews; equivale a unapprove de la MR. */
+async function dismissReview(repoFullName, number) {
+  return api("POST", `/projects/${proj(repoFullName)}/merge_requests/${number}/unapprove`);
 }
 
 async function diffRefs(repoFullName, number) {
@@ -663,6 +681,8 @@ module.exports = {
   addIssueComment,
   addInlineComment,
   replyToThread,
+  setThreadResolved,
+  dismissReview,
   submitReview,
   createBranch,
   forceUpdateBranch,

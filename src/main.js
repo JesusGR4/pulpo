@@ -91,6 +91,8 @@ function wireIpc() {
       allowed.gitlabBaseUrl = partial.gitlabBaseUrl.trim().replace(/\/+$/, "");
       gh().invalidateTokenCache();
     }
+    if (typeof partial.aiModel === "string" && ai.isAiModel(partial.aiModel)) allowed.aiModel = partial.aiModel;
+    if (typeof partial.aiEffort === "string" && ai.isAiEffort(partial.aiEffort)) allowed.aiEffort = partial.aiEffort;
     if (typeof partial.token === "string") {
       allowed.token = partial.token.trim() || null;
       gh().invalidateTokenCache();
@@ -144,11 +146,14 @@ function wireIpc() {
   ipcMain.handle("pr:replyThread", async (_event, { repo, number, commentDatabaseId, body }) =>
     gh().replyToThread(repo, number, commentDatabaseId, body),
   );
+  ipcMain.handle("pr:resolveThread", async (_event, { threadId, resolved }) =>
+    gh().setThreadResolved(String(threadId), Boolean(resolved)),
+  );
   ipcMain.handle("pr:submitReview", async (_event, { repo, number, review }) =>
     gh().submitReview(repo, number, review),
   );
   ipcMain.handle("pr:dismissReview", async (_event, { repo, number, reviewId, message }) =>
-    github.dismissReview(repo, number, reviewId, String(message || "")),
+    gh().dismissReview(repo, number, reviewId, String(message || "")),
   );
 
   ipcMain.handle("ai:review", async (_event, { title, body, files }) => ai.generateReview({ title, body, files }));
