@@ -502,7 +502,7 @@ function openSettings() {
 // Presets de rol: pre-marcan un conjunto de apartados; el usuario luego afina. "todo" se calcula
 // como availableSectionKeys(). Solo se aplican las claves válidas para el proveedor actual.
 const SECTION_PRESETS = {
-  desarrollo: ["prs", "historial", "historico", "milestones", "releases", "local", "propuestas"],
+  desarrollo: ["prs", "validacion", "historial", "historico", "milestones", "releases", "local", "propuestas"],
   operaciones: ["soporte", "milestones", "historico", "entornos", "usuarios"],
 };
 

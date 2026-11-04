@@ -120,6 +120,8 @@ contextBridge.exposeInMainWorld("monstro", {
   playReleaseJob: (projectId, jobId) => ipcRenderer.invoke("releases:playJob", { projectId, jobId }),
   projectEnvironments: (projectId) => ipcRenderer.invoke("env:list", { projectId }),
   envHealth: (url, project) => ipcRenderer.invoke("env:health", { url, project }),
+  validationBoard: () => ipcRenderer.invoke("validation:board"),
+  validationAct: (repo, iid, kind, jobId) => ipcRenderer.invoke("validation:act", { repo, iid, kind, jobId }),
   cognitoProfiles: () => ipcRenderer.invoke("cognito:profiles"),
   cognitoPools: () => ipcRenderer.invoke("cognito:pools"),
   cognitoUsers: (poolId, q) => ipcRenderer.invoke("cognito:users", { poolId, q }),

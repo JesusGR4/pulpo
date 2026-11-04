@@ -461,6 +461,14 @@ async function playJob() {
   throw new Error("Lanzar jobs de CI solo está disponible en GitLab.");
 }
 
+async function validationBoard() {
+  throw new Error("El tablero de Validación solo está disponible en GitLab.");
+}
+
+async function validationAct() {
+  throw new Error("El tablero de Validación solo está disponible en GitLab.");
+}
+
 async function createSnippet() {
   throw new Error("Publicar el resumen como snippet solo está disponible en GitLab.");
 }
@@ -599,6 +607,8 @@ module.exports = {
   projectEnvironments,
   releasePipeline,
   playJob,
+  validationBoard,
+  validationAct,
   createSnippet,
   saveMilestoneSummary,
   createIssue,

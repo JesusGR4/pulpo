@@ -172,6 +172,11 @@ async function boot() {
   if (IS_SELFTEST && SELFTEST_ROUTE === "releases-publish") enterReleases("publish");
   if (IS_SELFTEST && SELFTEST_ROUTE === "releases-pipelines") enterReleases("pipelines");
   if (IS_SELFTEST && SELFTEST_ROUTE === "entornos") enterEnvironments();
+  if (IS_SELFTEST && SELFTEST_ROUTE.startsWith("validacion")) {
+    // `validacion-detail` abre el panel de la tarjeta con más MRs.
+    state.validation.selftestDetail = SELFTEST_ROUTE === "validacion-detail";
+    enterValidation();
+  }
   if (IS_SELFTEST && SELFTEST_ROUTE.startsWith("usuarios")) {
     // `usuarios-q:<texto>` entra ya buscando ese texto.
     state.cognito.q = SELFTEST_ROUTE.startsWith("usuarios-q:") ? SELFTEST_ROUTE.slice("usuarios-q:".length) : "";
@@ -438,7 +443,7 @@ $("#repo-select").addEventListener("change", (event) => {
 $("#search").addEventListener("input", (event) => {
   state.search = event.target.value;
   if (state.view === "milestones") renderMilestones();
-  else if (["releases", "local", "support", "environments", "cognito"].includes(state.view)) {/* estas vistas no usan el buscador global */}
+  else if (["releases", "local", "support", "environments", "cognito", "validation"].includes(state.view)) {/* estas vistas no usan el buscador global */}
   else renderList();
 });
 document.querySelectorAll(".bucket[data-bucket]").forEach((btn) =>
@@ -448,6 +453,7 @@ $("#bucket-history").addEventListener("click", enterHistory);
 $("#bucket-milestones").addEventListener("click", () => enterMilestones("tasks"));
 $("#bucket-milestones-summary").addEventListener("click", () => enterMilestones("summary"));
 $("#bucket-entornos").addEventListener("click", () => enterEnvironments());
+$("#bucket-validacion").addEventListener("click", () => enterValidation());
 $("#bucket-usuarios").addEventListener("click", () => enterCognito());
 $("#bucket-propuestas").addEventListener("click", () => enterProposals());
 $("#bucket-support").addEventListener("click", () => enterSupport("incidencias"));
@@ -472,6 +478,7 @@ function firstAvailableLanding() {
     ["soporte", () => enterSupport("incidencias")],
     ["releases", () => enterReleases("branches")],
     ["entornos", () => enterEnvironments()],
+    ["validacion", () => enterValidation()],
     ["local", () => enterLocal("empezar")],
     ["propuestas", () => enterProposals()],
     ["usuarios", () => enterCognito()],
@@ -500,7 +507,7 @@ function switchRepo(repo) {
   closeDetail();
   if (state.view === "history") loadHistory();
   // Milestones, Releases, Soporte y Trabajo local son de grupo/proyecto fijo, no por repo: el cambio no las afecta.
-  else if (!["milestones", "releases", "local", "support", "environments"].includes(state.view)) refresh();
+  else if (!["milestones", "releases", "local", "support", "environments", "validation"].includes(state.view)) refresh();
 }
 
 /* ============ atajos de teclado ============ */
