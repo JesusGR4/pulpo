@@ -23,7 +23,7 @@
   min-width: 190px; padding-right: 8px;
 }
 .env-proj-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.env-cell { padding: 0; }
+.env-cell { padding: 0; vertical-align: top; }
 .env-cell.empty { background: none; }
 
 /* El recuadro es un botón: abre la pipeline del deploy (o la URL del entorno si no hay). */
@@ -86,3 +86,17 @@
 .env-picker[open] > summary::before { transform: rotate(90deg); }
 .env-picker-n { font-weight: 400; color: var(--text-muted); font-size: 12px; }
 .env-picker .ms-proj-chips { margin-top: 10px; }
+
+/* Slot de dev: naranja = alguien lo tiene pendiente de QA (bloquea el aprobar-para-probar de las demás
+   MRs); verde con candado abierto = libre aunque siga desplegada esa rama. */
+.env-box.busy { border-left-color: var(--orange); background: var(--orange-bg); }
+.env-box.busy .env-ico, .env-legend .env-key.busy { color: var(--orange); }
+.env-box.free { border-left-color: var(--green); }
+.env-box.free .env-ico, .env-legend .env-key.free { color: var(--green); }
+.env-links { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.env-link {
+  display: inline-flex; align-items: center; gap: 3px; padding: 1px 6px; font: inherit; font-size: 11px;
+  color: var(--accent); background: none; border: 1px solid var(--border); border-radius: 5px; cursor: pointer;
+}
+.env-link:hover { border-color: var(--accent); }
+.env-link svg { width: 11px; height: 11px; }

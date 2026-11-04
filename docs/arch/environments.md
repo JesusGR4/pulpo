@@ -17,6 +17,15 @@ Cell verdict (`deployVerdict`): failed/canceled → red, running/created/blocked
 
 Columns = union of all environment names, sorted by `tier` (`TIER_RANK`: development < testing < staging < production < other) so the matrix reads left-to-right by how close to prod it is; this also exposes **drift** (prod three releases behind staging) at a glance.
 
+## Slot de dev (tier `development`)
+
+Dev es un único slot de QA que gestiona el componente **`OpenSaludGroup/delivery-flow`** (`scripts/dev-slot.cjs`): `aprobar-para-probar` de una MR falla mientras otra tenga dev. La celda de development enseña **quién lo tiene** en vez del ref crudo (`refs/merge-requests/901/head`):
+
+- `devSlot(id, ref)` (`src/gitlab/environments.js`): ref de MR → esa MR; rama → su MR abierta; `development` → nadie. Trae `state/draft/head_pipeline` y la tarea + Epic de `closes_issues` + `related_issues` (Epic = `isEpicUrl`).
+- `devSlotVerdict` (renderer) es una **réplica de `isDevBusy`**: ocupado = MR abierta, no Draft, con pipeline que no es `success` (QA valida con `validar-qa-para-mergear` y el pipeline pasa a success). Candado naranja = ocupado; candado abierto verde = libre aunque siga esa rama. Si delivery-flow cambia la regla, cambia aquí — `node scripts/test-dev-slot.js`.
+- **GOTCHA**: delivery-flow deja el entorno `development` en `stopped` tras cada pipeline de MR, así que `states=available` lo escondía. Se piden todos y se filtra: vivos + tier development.
+- ponytail: los proyectos con `dev_stamp: html` leen el holder del sello `app-version` de la web; aquí se lee del último deployment, que es el mismo job. Si algún día divergen, sondear el sello en `env:health`.
+
 ## Layer 2 — HTTP probe (only if the environment has `external_url`)
 
 Lives in **main.js (`env:health`)**, not the renderer: the renderer is sandboxed and the CSP forbids external hosts. The verdict is a pure function in **`src/health.js` (`healthVerdict`)** with **THREE states on purpose**.
