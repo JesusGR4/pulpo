@@ -25,7 +25,8 @@ function register() {
   // ruta (verificado: dashboard.opensalud.es devuelve 200 en /health y en /esto-no-existe). Un 200
   // con content-type HTML NO demuestra que la app esté sana — solo que nginx está en pie. Por eso
   // "responde HTML pero no se puede verificar" es `unknown` (ámbar), nunca `up`. Un health check que
-  // miente es peor que no tenerlo.
+  // miente es peor que no tenerlo. Para salir de ahí, la sonda pide el bundle JS que enlaza el index
+  // (health.bundleUrl): si se descarga, el front está entero.
   ipcMain.handle("env:health", async (_event, { url, project }) => {
     if (typeof url !== "string" || !/^https?:\/\//.test(url)) throw new Error("URL no válida");
     const cfg = config.load();
@@ -45,13 +46,24 @@ function register() {
       const ms = Date.now() - started;
       const type = res.headers.get("content-type") || "";
       let bodyMatched = null;
+      let bundle = null;
       if (expect && res.ok) bodyMatched = (await res.text()).slice(0, 200000).includes(expect);
+      else if (res.ok && /text\/html/i.test(type)) {
+        // SPA sin texto esperado: el 200 no prueba nada, así que se pide el bundle que enlaza el index.
+        const src = health.bundleUrl((await res.text()).slice(0, 200000), res.url || target);
+        if (src) {
+          const a = await fetch(src, { signal: ctrl.signal, headers: { "User-Agent": "monstro-app" } });
+          a.body?.cancel().catch(() => {});
+          bundle = { ok: a.ok, httpStatus: a.status, contentType: a.headers.get("content-type") || "", path: new URL(src).pathname };
+        }
+      }
       const { status, note } = health.healthVerdict({
         ok: res.ok,
         httpStatus: res.status,
         contentType: type,
         expect,
         bodyMatched,
+        bundle,
       });
       return { status, httpStatus: res.status, ms, contentType: type, url: target, note };
     } catch (err) {

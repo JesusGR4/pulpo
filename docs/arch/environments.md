@@ -17,11 +17,22 @@ Cell verdict (`deployVerdict`): failed/canceled → red, running/created/blocked
 
 Columns = union of all environment names, sorted by `tier` (`TIER_RANK`: development < testing < staging < production < other) so the matrix reads left-to-right by how close to prod it is; this also exposes **drift** (prod three releases behind staging) at a glance.
 
+## Slot de dev (tier `development`)
+
+Dev es un único slot de QA que gestiona el componente **`OpenSaludGroup/delivery-flow`** (`scripts/dev-slot.cjs`): `aprobar-para-probar` de una MR falla mientras otra tenga dev. La celda de development enseña **quién lo tiene** en vez del ref crudo (`refs/merge-requests/901/head`):
+
+- `devSlot(id, ref)` (`src/gitlab/environments.js`): ref de MR → esa MR; rama → su MR abierta; `development` → nadie. Trae `state/draft/head_pipeline` y la tarea + Epic de `closes_issues` + `related_issues` (Epic = `isEpicUrl`).
+- `devSlotVerdict` (renderer) es una **réplica de `isDevBusy`**: ocupado = MR abierta, no Draft, con pipeline que no es `success` (QA valida con `validar-qa-para-mergear` y el pipeline pasa a success). Candado naranja = ocupado; candado abierto verde = libre aunque siga esa rama. Si delivery-flow cambia la regla, cambia aquí — `node scripts/test-dev-slot.js`.
+- **GOTCHA**: delivery-flow deja el entorno `development` en `stopped` tras cada pipeline de MR, así que `states=available` lo escondía. Se piden todos y se filtra: vivos + tier development.
+- ponytail: los proyectos con `dev_stamp: html` leen el holder del sello `app-version` de la web; aquí se lee del último deployment, que es el mismo job. Si algún día divergen, sondear el sello en `env:health`.
+
 ## Layer 2 — HTTP probe (only if the environment has `external_url`)
 
 Lives in **main.js (`env:health`)**, not the renderer: the renderer is sandboxed and the CSP forbids external hosts. The verdict is a pure function in **`src/health.js` (`healthVerdict`)** with **THREE states on purpose**.
 
 **A 2xx is NOT proof of health**: a SPA serves index.html with 200 on ANY path (verified: `dashboard.opensalud.es` returns 200 `text/html` on `/health`, `/status` AND `/esto-no-existe`). So 200-with-HTML and no configured `expect` string is **`unknown` (amber), never `up`** — a health check that lies is worse than none. `up` needs positive proof: a non-HTML response (an API returning JSON) or the configured `expect` text present in the body.
+
+**SPAs: the bundle is the proof.** With HTML and no `expect`, `bundleUrl` (`src/health.js`) picks the first same-origin `<script type="module">` of the index (the Vite/Nuxt entry; else the first same-origin `<script src>`; CDN scripts never count) and `env:health` fetches it. JS back → `up`; error, or **HTML back** (the catch-all serving index.html with 200) → `down` "No carga el bundle". That catches the classic static-front failure: an index pointing at assets that are not there. Only an index with no own script stays `unknown`.
 
 Check: `node scripts/test-health-verdict.js`.
 
