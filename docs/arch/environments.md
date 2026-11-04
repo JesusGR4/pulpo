@@ -32,6 +32,8 @@ Lives in **main.js (`env:health`)**, not the renderer: the renderer is sandboxed
 
 **A 2xx is NOT proof of health**: a SPA serves index.html with 200 on ANY path (verified: `dashboard.opensalud.es` returns 200 `text/html` on `/health`, `/status` AND `/esto-no-existe`). So 200-with-HTML and no configured `expect` string is **`unknown` (amber), never `up`** — a health check that lies is worse than none. `up` needs positive proof: a non-HTML response (an API returning JSON) or the configured `expect` text present in the body.
 
+**SPAs: the bundle is the proof.** With HTML and no `expect`, `bundleUrl` (`src/health.js`) picks the first same-origin `<script type="module">` of the index (the Vite/Nuxt entry; else the first same-origin `<script src>`; CDN scripts never count) and `env:health` fetches it. JS back → `up`; error, or **HTML back** (the catch-all serving index.html with 200) → `down` "No carga el bundle". That catches the classic static-front failure: an index pointing at assets that are not there. Only an index with no own script stays `unknown`.
+
 Check: `node scripts/test-health-verdict.js`.
 
 ## Do not reach for these
