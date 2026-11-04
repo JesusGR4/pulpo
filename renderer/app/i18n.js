@@ -1127,6 +1127,7 @@ Object.assign(I18N_EN, {
   "Con <b>merge commit</b>, una tras otra.": "With a <b>merge commit</b>, one after another.",
   "Hecho": "Done",
   "{ok} de {n} acciones hechas": "{ok} of {n} actions done",
+  "Enlazando tareas {l}/{n}": "Linking tasks {l}/{n}",
 });
 
 // LANG se resuelve en boot() (config.language || idioma del sistema). "es" por defecto.

@@ -36,6 +36,8 @@ const VAL_BLOCKED = {
 const VAL_SUB = { deploying: "desplegando", "in-dev": "en dev", "deploy-failed": "despliegue fallido" };
 
 let valDragKey = null;
+let valRun = 0; // id de la carga en curso: los parciales de una carga anterior se descartan
+let valPending = false; // llegó un tablero en mitad de un arrastre: se pinta al soltar
 
 async function enterValidation() {
   if (!isGitlab()) {
@@ -49,25 +51,40 @@ async function enterValidation() {
   await loadValidation();
 }
 
+// Pinta un tablero (parcial o final). Durante un arrastre se guarda: repintar se cargaría el drag.
+function applyValBoard(board) {
+  const v = state.validation;
+  v.cards = board.cards;
+  v.errors = board.errors || [];
+  v.progress = { loaded: board.loaded, total: board.total };
+  if (valDragKey) valPending = true;
+  else renderValidation();
+}
+
 async function loadValidation() {
   const v = state.validation;
+  const runId = ++valRun;
   v.loading = true;
   renderValidation();
+  const off = window.monstro.onValidationProgress((board) => board.runId === runId && applyValBoard(board));
   try {
-    const res = await window.monstro.validationBoard();
-    v.cards = res.cards;
-    v.errors = res.errors || [];
-    if (v.selected && !v.cards.some((c) => c.key === v.selected)) v.selected = null;
-    if (v.selftestDetail) v.selected = [...v.cards].sort((a, b) => b.mrs.length - a.mrs.length)[0]?.key || null;
+    const res = await window.monstro.validationBoard(runId);
+    if (runId !== valRun) return;
+    if (v.selftestDetail) v.selected = [...res.cards].sort((a, b) => b.mrs.length - a.mrs.length)[0]?.mrs[0].key || null;
+    v.loading = false;
+    applyValBoard(res);
   } catch (err) {
-    v.cards = [];
-    v.errors = [{ repo: "", error: String(err.message || err) }];
+    if (runId !== valRun) return;
+    v.loading = false;
+    applyValBoard({ cards: v.cards || [], errors: [{ repo: "", error: String(err.message || err) }] });
+  } finally {
+    off();
   }
-  v.loading = false;
-  renderValidation();
 }
 
 const valCard = (key) => state.validation.cards?.find((c) => c.key === key) || null;
+// La selección es una MR, no la tarjeta: las tarjetas se reagrupan (y cambian de key) al enlazar tareas.
+const valSelectedCard = () => state.validation.cards?.find((c) => c.mrs.some((m) => m.key === state.validation.selected)) || null;
 function valIssueRef(url) {
   const n = /\/-\/(?:issues|work_items)\/(\d+)/.exec(url || "")?.[1];
   return n ? `#${n}` : "";
@@ -79,7 +96,7 @@ function valWarnings(mr) {
 }
 
 function valCardHtml(card) {
-  const sel = state.validation.selected === card.key;
+  const sel = card.mrs.some((m) => m.key === state.validation.selected);
   const top = card.task
     ? `<span class="val-ref">${esc(valIssueRef(card.task.url))}</span>`
     : `<span class="val-loose">${t("Sin tarea")}</span>`;
@@ -157,17 +174,25 @@ function renderValidation() {
   }).join("");
   const errors = v.errors.map((e) => `<div class="val-error">${icon("triangle-alert")}${esc(e.repo ? `${e.repo}: ${e.error}` : e.error)}</div>`).join("");
   const nMrs = cards.reduce((n, c) => n + c.mrs.length, 0);
+  const p = v.progress;
+  const linking = v.loading && p?.total
+    ? `<span class="val-progress">${icon("loader-circle", "spin")}${t("Enlazando tareas {l}/{n}", { l: p.loaded, n: p.total })}</span>`
+    : "";
+  // Repintar entero resetea el scroll de cada columna: se guarda y se repone (llegan parciales cada ~0,7 s).
+  const scrolls = [...list.querySelectorAll(".val-col-body")].map((el) => el.scrollTop);
   list.innerHTML = `<div class="val-view">
     <div class="val-head">
       <div><h1>${t("Validación")}</h1><span class="muted">${t("{c} tarjetas · {m} MRs abiertas hacia development", { c: cards.length, m: nMrs })}</span></div>
-      <button class="icon-btn" id="val-refresh" title="${t("Recargar")}">${icon("refresh-cw", v.loading ? "spin" : "")}</button>
+      ${linking}
+      <button class="icon-btn" id="val-refresh" title="${t("Recargar")}" ${v.loading ? "disabled" : ""}>${icon("refresh-cw", v.loading ? "spin" : "")}</button>
     </div>
     ${errors}
     <div class="val-layout">
       <div class="val-board">${cols}</div>
-      ${valCard(v.selected) ? `<aside class="val-detail">${valDetailHtml(valCard(v.selected))}</aside>` : ""}
+      ${valSelectedCard() ? `<aside class="val-detail">${valDetailHtml(valSelectedCard())}</aside>` : ""}
     </div>
   </div>`;
+  list.querySelectorAll(".val-col-body").forEach((el, i) => (el.scrollTop = scrolls[i] || 0));
   wireValidation();
 }
 
@@ -180,7 +205,7 @@ function wireValidation() {
   list.querySelectorAll(".val-link, #val-task").forEach((b) => b.addEventListener("click", () => window.monstro.openExternal(b.dataset.url)));
   list.querySelectorAll(".val-card").forEach((el) => {
     el.addEventListener("click", () => {
-      state.validation.selected = el.dataset.key;
+      state.validation.selected = valCard(el.dataset.key)?.mrs[0].key || null;
       renderValidation();
     });
     el.addEventListener("dragstart", (event) => {
@@ -192,6 +217,10 @@ function wireValidation() {
     el.addEventListener("dragend", () => {
       valDragKey = null;
       el.classList.remove("dragging");
+      if (valPending) {
+        valPending = false;
+        renderValidation();
+      }
     });
   });
   list.querySelectorAll(".val-col").forEach((col) => {
@@ -214,8 +243,8 @@ function wireValidation() {
       if (card) confirmValidationMove(card, target);
     });
   });
-  $("#val-next")?.addEventListener("click", (event) => confirmValidationMove(valCard(state.validation.selected), Number(event.currentTarget.dataset.target)));
-  $("#val-merge")?.addEventListener("click", () => confirmValidationMerge(valCard(state.validation.selected)));
+  $("#val-next")?.addEventListener("click", (event) => confirmValidationMove(valSelectedCard(), Number(event.currentTarget.dataset.target)));
+  $("#val-merge")?.addEventListener("click", () => confirmValidationMerge(valSelectedCard()));
 }
 
 function valActionLabel(a, m) {

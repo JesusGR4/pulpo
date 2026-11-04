@@ -120,7 +120,13 @@ contextBridge.exposeInMainWorld("monstro", {
   playReleaseJob: (projectId, jobId) => ipcRenderer.invoke("releases:playJob", { projectId, jobId }),
   projectEnvironments: (projectId) => ipcRenderer.invoke("env:list", { projectId }),
   envHealth: (url, project) => ipcRenderer.invoke("env:health", { url, project }),
-  validationBoard: () => ipcRenderer.invoke("validation:board"),
+  validationBoard: (runId) => ipcRenderer.invoke("validation:board", { runId }),
+  // Tableros parciales mientras se enlazan las tareas. Devuelve un de-suscriptor.
+  onValidationProgress: (cb) => {
+    const listener = (_e, board) => cb(board);
+    ipcRenderer.on("validation:progress", listener);
+    return () => ipcRenderer.removeListener("validation:progress", listener);
+  },
   validationAct: (repo, iid, kind, jobId) => ipcRenderer.invoke("validation:act", { repo, iid, kind, jobId }),
   cognitoProfiles: () => ipcRenderer.invoke("cognito:profiles"),
   cognitoPools: () => ipcRenderer.invoke("cognito:pools"),

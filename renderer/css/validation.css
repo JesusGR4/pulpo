@@ -7,7 +7,7 @@
 .val-error { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--red); background: var(--red-bg); border-radius: 8px; padding: 6px 10px; }
 
 .val-layout { display: flex; gap: 14px; align-items: flex-start; flex: 1; min-height: 0; }
-.val-board { flex: 1; min-width: 0; display: grid; grid-template-columns: repeat(4, minmax(145px, 1fr)); gap: 10px; overflow-x: auto; align-items: start; }
+.val-board { flex: 1; min-width: 0; display: grid; grid-template-columns: repeat(4, minmax(180px, 1fr)); gap: 10px; overflow-x: auto; align-items: start; }
 
 .val-col { --tone: var(--text-muted); background: var(--gray-bg); border: 1px solid var(--border); border-top: 3px solid var(--tone); border-radius: 10px; display: flex; flex-direction: column; min-width: 0; }
 .val-col-approved { --tone: var(--accent); }
@@ -44,7 +44,7 @@
 .val-dot-tested { background: var(--green); }
 
 /* Panel de detalle */
-.val-detail { flex: 0 0 310px; position: sticky; top: 0; background: var(--bg-raised); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; display: flex; flex-direction: column; gap: 14px; max-height: calc(100vh - 150px); overflow-y: auto; }
+.val-detail { flex: 0 0 360px; position: sticky; top: 0; background: var(--bg-raised); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; display: flex; flex-direction: column; gap: 14px; max-height: calc(100vh - 150px); overflow-y: auto; }
 .val-detail-head { position: relative; padding-right: 28px; }
 .val-detail-close { position: absolute; top: -6px; right: -8px; }
 .val-detail-head h2 { font-size: 15px; line-height: 1.35; margin-top: 4px; }
@@ -97,3 +97,7 @@
   .val-layout { flex-direction: column; }
   .val-detail { position: static; flex-basis: auto; width: 100%; max-height: none; }
 }
+
+/* Ancho completo: #pr-list se limita a 980px para la lista de MRs. */
+#pr-list:has(.val-view) { max-width: none; }
+.val-progress { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); background: var(--gray-bg); border: 1px solid var(--border); border-radius: 10px; padding: 3px 10px; }

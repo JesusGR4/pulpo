@@ -10,8 +10,15 @@ const provider = require("../provider");
 const gh = () => provider.current();
 const KINDS = ["approve", "play", "retry"];
 
-function register() {
-  ipcMain.handle("validation:board", async () => gh().validationBoard(config.load().repos || []));
+function register(ctx) {
+  // Devuelve el tablero completo y, mientras, empuja parciales por "validation:progress" con el
+  // `runId` de la petición (el renderer descarta los de una carga anterior).
+  ipcMain.handle("validation:board", async (_event, { runId } = {}) =>
+    gh().validationBoard(config.load().repos || [], (board) => {
+      const win = ctx.win;
+      if (win && !win.isDestroyed()) win.webContents.send("validation:progress", { runId, ...board });
+    }),
+  );
 
   ipcMain.handle("validation:act", async (_event, { repo, iid, kind, jobId }) => {
     if (!(config.load().repos || []).includes(repo)) throw new Error("Repo no configurado");
