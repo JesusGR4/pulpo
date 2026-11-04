@@ -77,7 +77,7 @@ const state = {
   // (capa 1, GitLab). `health` = "path|entorno" → resultado de la sonda HTTP (capa 2, bajo demanda).
   environments: { projects: [], selected: new Set(), seeded: false, loading: false, data: new Map(), health: new Map(), probing: false },
   // Tablero de Validación (solo GitLab): tarjetas (tarea + sus MRs) con su columna; `selected` = key de la tarjeta.
-  validation: { cards: null, errors: [], loading: false, selected: null },
+  validation: { cards: null, errors: [], loading: false, selected: null, mode: "popover", tab: null },
   cognito: { profiles: [], pools: [], poolId: null, q: "", users: null, selected: null, user: null, userError: null, error: null, loading: false },
   prSnapshot: null, // nº → {reviewDecision, checks, reviewMe} para detectar cambios y notificar
   cursor: -1, // selección con teclado (j/k) en la lista

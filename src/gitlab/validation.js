@@ -48,6 +48,91 @@ async function repoMRs(repo) {
   });
 }
 
+const MERGED_QUERY = `query($path: ID!, $after: Time, $cursor: String) {
+  project(fullPath: $path) {
+    mergeRequests(state: merged, targetBranches: ["development"], mergedAfter: $after, first: 100, after: $cursor) {
+      pageInfo { hasNextPage endCursor }
+      nodes { iid title webUrl sourceBranch description updatedAt mergedAt mergeCommitSha author { username } approvedBy { nodes { username } } }
+    }
+  }
+}`;
+
+/**
+ * MRs mergeadas a development que NO están en producción ES: las que tienen su merge commit en el
+ * `compare` entre lo desplegado en `production` y development. Sin límite de fecha: nada anterior a
+ * lo desplegado puede estar pendiente, así que se piden las mergeadas desde (la fecha de) ese commit.
+ * Un repo sin despliegues en `production` (opensalud) no aporta nada. Cada MR sale con `prod` a
+ * medias ({ blockedByTag, mxPending }); `prodLookup` completa la tag y el ▶ después.
+ */
+async function pendingProduction(repo) {
+  const id = proj(repo);
+  const lastProd = async (env) =>
+    (await api("GET", `/projects/${id}/deployments?environment=${env}&status=success&order_by=finished_at&sort=desc&per_page=1`).catch(() => []))[0] || null;
+  const [es, mx] = await Promise.all([lastProd("production"), lastProd("production-mx")]);
+  if (!es) return [];
+  const missing = async (sha) => new Set(((await api("GET", `/projects/${id}/repository/compare?from=${sha}&to=development`))?.commits || []).map((c) => c.id));
+  const [esMissing, mxMissing, deployed, waiting] = await Promise.all([
+    missing(es.sha),
+    mx ? missing(mx.sha).catch(() => null) : null,
+    api("GET", `/projects/${id}/repository/commits/${es.sha}`),
+    // El ▶ de producción de cada tag es su deployment `blocked` (o `running` si ya se pulsó): el nombre
+    // del job cambia en cada proyecto (deploy, deploy:prod, deploy_production, deploy-nuxt…).
+    Promise.all(["blocked", "running"].map((s) => api("GET", `/projects/${id}/deployments?environment=production&status=${s}&order_by=created_at&sort=desc&per_page=50`).catch(() => []))),
+  ]);
+  if (!esMissing.size) return [];
+  const byTag = new Map();
+  for (const d of waiting.flat()) if (d.deployable && !byTag.has(d.ref)) byTag.set(d.ref, { id: d.deployable.id, name: d.deployable.name, status: d.deployable.status });
+  // Un día de margen: la fecha del commit desplegado no es la de su merge.
+  const after = new Date(Date.parse(deployed.committed_date) - 86400e3).toISOString();
+  const nodes = [];
+  // ponytail: tope de 10 páginas (1000 MRs) por si producción llevase muchísimo sin desplegarse.
+  for (let page = 0, cursor = null; page < 10; page++) {
+    const conn = (await graphql(MERGED_QUERY, { path: repo, after, cursor }))?.project?.mergeRequests;
+    nodes.push(...(conn?.nodes || []));
+    if (!conn?.pageInfo?.hasNextPage) break;
+    cursor = conn.pageInfo.endCursor;
+  }
+  return nodes
+    .filter((n) => n.mergeCommitSha && esMissing.has(n.mergeCommitSha))
+    .map((n) => ({
+      key: `${repo.split("/").pop()}!${n.iid}`,
+      repo,
+      iid: Number(n.iid),
+      title: n.title,
+      url: n.webUrl,
+      merged: true,
+      mergedAt: n.mergedAt,
+      mergeSha: n.mergeCommitSha,
+      draft: false,
+      approved: true,
+      approvedBy: (n.approvedBy?.nodes || []).map((u) => u.username),
+      author: n.author?.username || null,
+      branch: n.sourceBranch,
+      updatedAt: n.updatedAt,
+      citations: rules.parseCitations(n.description),
+      pipeline: null,
+      jobs: [],
+      prod: { tag: null, checked: false, mxPending: mxMissing ? mxMissing.has(n.mergeCommitSha) : false, byTag },
+    }));
+}
+
+// Tag de producción que ya contiene el merge (y su ▶ de prod) o, sin tag, el ▶ publicar-tag-produccion
+// del pipeline de development de ese merge.
+async function prodLookup(mr, byTag) {
+  const id = proj(mr.repo);
+  const refs = await api("GET", `/projects/${id}/repository/commits/${mr.mergeSha}/refs?type=tag&per_page=100`).catch(() => []);
+  const tag = rules.productionTag((refs || []).map((r) => r.name));
+  const prod = { tag, mxPending: mr.prod.mxPending, checked: true, deployJob: null, publishJob: null };
+  if (tag) prod.deployJob = byTag?.get(tag) || null;
+  else {
+    const [p] = (await api("GET", `/projects/${id}/pipelines?sha=${mr.mergeSha}&ref=development&per_page=1`).catch(() => [])) || [];
+    const jobs = p ? await api("GET", `/projects/${id}/pipelines/${p.id}/jobs?per_page=100`).catch(() => []) : [];
+    const j = (jobs || []).find((x) => x.name === "publicar-tag-produccion");
+    prod.publishJob = j ? { id: j.id, name: j.name, status: j.status } : null;
+  }
+  return prod;
+}
+
 // ponytail: solo related_issues. closes_issues ("Closes #N") no lo usaba ninguna de las ~60 MRs
 // (medido 2026-11-04) y doblaba las llamadas; si se empieza a usar, sumarlo aquí.
 async function linkedIssues(mr) {
@@ -55,6 +140,21 @@ async function linkedIssues(mr) {
   const seen = new Map();
   for (const i of list) if (i?.web_url && !seen.has(i.web_url)) seen.set(i.web_url, { url: i.web_url, title: i.title });
   return [...seen.values()];
+}
+
+// Columna, avisos y planes de una MR (se rehace cuando llega la info de producción de una mergeada).
+function classify(mr) {
+  const info = rules.mrStage(mr);
+  mr.stage = info.stage;
+  mr.stageIndex = rules.STAGES.indexOf(info.stage);
+  mr.flow = info.flow;
+  mr.sub = info.sub;
+  mr.warnings = info.warnings;
+  mr.flowJobs = info.jobs;
+  // Plan para soltarla en cada columna posterior (la tarjeta junta los de sus MRs); en una mergeada,
+  // su único paso hacia producción.
+  mr.toward = rules.STAGES.map((_s, i) => rules.planToward(mr, info, i));
+  mr.prodPlan = info.prodPlan || null;
 }
 
 // Issues enlazados por MR ("proyecto!iid" → { updatedAt, issues }): editar la descripción cambia
@@ -68,49 +168,60 @@ const issueCache = new Map();
  */
 async function validationBoard(repos, onProgress = () => {}) {
   const errors = [];
-  const [who, perRepo] = await Promise.all([
-    viewer().catch(() => null),
-    mapLimit(repos, 8, (repo) =>
-      repoMRs(repo).catch((err) => {
-        errors.push({ repo, error: String(err.message || err) });
-        return [];
-      }),
-    ),
-  ]);
+  const guard = (repo, what) => (err) => {
+    errors.push({ repo, error: `${what}${String(err.message || err)}` });
+    return [];
+  };
+  const [who, perRepo] = await Promise.all([viewer().catch(() => null), mapLimit(repos, 8, (repo) => repoMRs(repo).catch(guard(repo, "")))]);
+  // Producción va aparte y DESPUÉS de las abiertas (deployments + compare + mergeadas: ~15 s en frío;
+  // en paralelo competía con ellas y la primera foto pasaba de ~2 a ~7 s). Sus MRs se suman al llegar.
+  const mergedLater = mapLimit(repos, 8, (repo) => pendingProduction(repo).catch(guard(repo, "producción: ")));
   const me = who?.login;
-  const mrs = perRepo.flat();
-  for (const mr of mrs) {
-    mr.approvedByMe = !!me && mr.approvedBy.includes(me);
-    const cached = issueCache.get(mr.key);
-    mr.linked = cached?.updatedAt === mr.updatedAt;
-    mr.issues = mr.linked ? cached.issues : [];
-    Object.assign(mr, rules.taskAndEpic(mr));
-    const info = rules.mrStage(mr);
-    mr.stage = info.stage;
-    mr.stageIndex = rules.STAGES.indexOf(info.stage);
-    mr.flow = info.flow;
-    mr.sub = info.sub;
-    mr.warnings = info.warnings;
-    mr.flowJobs = info.jobs;
-    // Plan para soltarla en cada columna posterior (la tarjeta junta los de sus MRs).
-    mr.toward = rules.STAGES.map((_s, i) => rules.planToward(mr, info, i));
-  }
-  const pending = mrs.filter((mr) => !mr.linked);
-  let loaded = mrs.length - pending.length;
-  const snapshot = () => ({ cards: rules.groupTasks(mrs), errors, loaded, total: mrs.length });
-  if (pending.length) onProgress(snapshot());
-  let last = Date.now();
-  await mapLimit(pending, 12, async (mr) => {
-    mr.issues = await linkedIssues(mr);
-    issueCache.set(mr.key, { updatedAt: mr.updatedAt, issues: mr.issues });
-    Object.assign(mr, rules.taskAndEpic(mr));
-    loaded++;
+  const mrs = [];
+  const tagJobs = new Map(); // ▶ de producción por tag de cada repo: lo usa prodLookup y no viaja al renderer
+  let loaded = 0;
+  let last = 0;
+  let total = 0;
+  const snapshot = () => ({ cards: rules.groupTasks(mrs), errors, loaded, total });
+  const push = (force) => {
     // Reagrupar es barato, repintar no tanto: como mucho un tablero parcial cada ~0,7 s.
-    if (Date.now() - last > 700) {
-      last = Date.now();
-      onProgress(snapshot());
+    if (!force && Date.now() - last < 700) return;
+    last = Date.now();
+    onProgress(snapshot());
+  };
+  const add = (list) => {
+    for (const mr of list) {
+      if (mr.prod?.byTag) {
+        tagJobs.set(mr.key, mr.prod.byTag);
+        delete mr.prod.byTag;
+      }
+      mr.approvedByMe = !!me && mr.approvedBy.includes(me);
+      const cached = issueCache.get(mr.key);
+      mr.linked = cached?.updatedAt === mr.updatedAt;
+      mr.issues = mr.linked ? cached.issues : [];
+      Object.assign(mr, rules.taskAndEpic(mr));
+      classify(mr);
+      mrs.push(mr);
     }
-  });
+    // Pendiente = sin issues en caché o (mergeada) sin su tag/▶ de producción comprobados.
+    const pending = list.filter((mr) => !mr.linked || (mr.merged && !mr.prod.checked));
+    total += list.length;
+    loaded += list.length - pending.length;
+    push(true);
+    return mapLimit(pending, 12, async (mr) => {
+      const [issues, prod] = await Promise.all([mr.linked ? mr.issues : linkedIssues(mr), mr.merged ? prodLookup(mr, tagJobs.get(mr.key)) : null]);
+      mr.issues = issues;
+      issueCache.set(mr.key, { updatedAt: mr.updatedAt, issues });
+      Object.assign(mr, rules.taskAndEpic(mr));
+      if (prod) {
+        mr.prod = prod;
+        classify(mr);
+      }
+      loaded++;
+      push(false);
+    });
+  };
+  await Promise.all([add(perRepo.flat()), mergedLater.then((merged) => add(merged.flat()))]);
   return snapshot();
 }
 

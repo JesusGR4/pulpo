@@ -23,6 +23,7 @@ Del flujo de `OpenSaludGroup/delivery-flow` (su README: «el Approve de GitLab y
 | Aprobada | approved + `aprobar-para-probar` manual (failed → aviso) | approved + `deploy:dev` manual/created |
 | En pruebas | `aprobar-para-probar` success, validar sin success (sub: desplegando / en dev / despliegue fallido) | `deploy:dev` en marcha/success/failed |
 | Probada | `validar-qa-para-mergear` success | `qa:validado` success |
+| Sin producción | mergeada, sin estar en prod ES (ver abajo) | igual |
 
 - Si el pipeline va por delante del Approve, **manda el pipeline** + aviso «sin Approve».
 - Sin flujo de QA (pipeline antiguo) o sin pipeline: aviso, no pasan de Aprobada.
@@ -44,4 +45,30 @@ El drop (o «Pasar a…» del panel) abre SIEMPRE una confirmación con las acci
 con su motivo; se ejecuta MR a MR, sin atomicidad, y si una acción de una MR falla se omiten las siguientes de esa
 MR. Resultado por acción y recarga. «Mergear» (Probada) = `pr:merge` existente, merge commit.
 
-Selftest: `--selftest-route=validacion` y `validacion-detail` (abre la tarjeta con más MRs). Datos reales.
+## Sin producción (5ª columna, `pendingProduction` + `prodLookup`)
+
+MRs **mergeadas** a development que no están en prod ES, **sin límite de fecha**: el corte natural es lo
+desplegado. Por repo: último deployment `success` de `production` (y de `production-mx`) → `compare` desde ese
+sha hasta development → MRs mergeadas (GraphQL `mergedAfter` = fecha de ese commit − 1 día, paginado) cuyo
+`mergeCommitSha` esté en el compare. Un repo sin deployments en `production` (opensalud) no aporta nada. Sale
+de la columna al estar en prod ES; MX es solo aviso («falta prod MX»).
+
+Paso de cada una (`prodStage`): `commits/:sha/refs?type=tag` → la tag `YYYY.MM.N` más antigua que la contiene.
+- Con tag → ▶ su job de producción = el deployment **`blocked`** de esa tag en `production`. **GOTCHA**: el
+  nombre del job cambia en cada proyecto (`deploy`, `deploy:prod`, `deploy_production`, `deploy-nuxt`…), no se
+  busca por nombre.
+- Sin tag → ▶ `publicar-tag-produccion` del pipeline de development de su merge. **La tag se crea sobre ese
+  commit y se lleva todo lo mergeado antes**; desplegar una tag despliega todas las MRs que contiene: la
+  confirmación lista las demás.
+
+A esta columna **no se arrastra**: se llega con «Mergear» desde Probada. Va en paralelo y DESPUÉS de las
+abiertas (en paralelo competía con ellas: primera foto de ~2 a ~7 s); ~15 s más en frío.
+
+## Detalle de una tarjeta (`renderer/app/validation-detail.js`)
+
+Clic = **ficha flotante** anclada a la tarjeta (a la derecha si cabe, si no a la izquierda), con el ▶ de
+producción de cada MR en línea y «Pasar a…» / «Mergear» / «Abrir tarea». «Abrir completo» = **panel acoplado
+abajo** con pestañas Resumen · Pipelines · Producción y «Siguiente paso». Esc o clic fuera cierran la ficha.
+`state.validation.selected` es la key de una MR (las tarjetas se reagrupan y cambian de key al enlazar).
+
+Selftest: `--selftest-route=validacion`, `validacion-detail` (ficha) y `validacion-dock` (panel). Datos reales.

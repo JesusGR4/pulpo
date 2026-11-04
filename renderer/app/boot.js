@@ -173,8 +173,8 @@ async function boot() {
   if (IS_SELFTEST && SELFTEST_ROUTE === "releases-pipelines") enterReleases("pipelines");
   if (IS_SELFTEST && SELFTEST_ROUTE === "entornos") enterEnvironments();
   if (IS_SELFTEST && SELFTEST_ROUTE.startsWith("validacion")) {
-    // `validacion-detail` abre el panel de la tarjeta con más MRs.
-    state.validation.selftestDetail = SELFTEST_ROUTE === "validacion-detail";
+    // `validacion-detail` abre la ficha (popover) de una tarjeta; `validacion-dock`, el panel de abajo.
+    state.validation.selftestDetail = { "validacion-detail": "popover", "validacion-dock": "dock" }[SELFTEST_ROUTE] || null;
     enterValidation();
   }
   if (IS_SELFTEST && SELFTEST_ROUTE.startsWith("usuarios")) {

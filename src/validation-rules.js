@@ -7,7 +7,10 @@
 //   1.x: ▶ deploy:dev → ▶ qa:validado
 // Un push nuevo crea un pipeline nuevo y la MR vuelve a "Aprobada": hay que pulsar el ▶ otra vez.
 
-const STAGES = ["unapproved", "approved", "testing", "tested"];
+// "merged" = mergeada a development pero aún no en producción ES (se sale de ahí al desplegar).
+const STAGES = ["unapproved", "approved", "testing", "tested", "merged"];
+
+const PRODUCTION_TAG = /^(\d{4})\.(\d{2})\.(\d+)$/; // las de MX llevan -mx y no cuentan para ES
 
 const FLOWS = {
   v2: { gate: "aprobar-para-probar", deploy: "desplegar-en-dev", validate: "validar-qa-para-mergear" },
@@ -27,6 +30,7 @@ function jobByName(jobs, name) {
  * Si el pipeline va por delante del Approve, manda el pipeline (con aviso "sin Approve").
  */
 function mrStage(mr) {
+  if (mr.merged) return prodStage(mr);
   const jobs = mr.jobs || [];
   const flowKey = jobByName(jobs, FLOWS.v2.gate) ? "v2" : jobByName(jobs, FLOWS.v1.deploy) ? "v1" : null;
   const flow = flowKey ? FLOWS[flowKey] : null;
@@ -55,6 +59,35 @@ function mrStage(mr) {
   return { stage, flow: flowKey, sub, warnings, jobs: j };
 }
 
+/**
+ * Una MR mergeada que no está en prod ES. `mr.prod` = { tag, deployJob, publishJob, mxPending }:
+ * con tag → ▶ el job de producción de esa tag (el deployment `blocked`); sin tag → ▶
+ * publicar-tag-produccion del pipeline de development de su merge. Devuelve además `prodPlan`
+ * ({ actions, blocked }) con ese único paso.
+ */
+function prodStage(mr) {
+  const p = mr.prod || {};
+  const warnings = p.mxPending ? ["mx-pending"] : [];
+  // Aún sin saber su tag (llega en la fase progresiva): columna sí, paso todavía no.
+  if (p.checked === false) return { stage: "merged", flow: null, sub: "checking", warnings, jobs: {}, prodPlan: { actions: [], blocked: "checking" } };
+  const step = p.tag ? jobAction(p.deployJob) : jobAction(p.publishJob);
+  let sub = p.tag ? "tagged" : "no-tag";
+  if (step.blocked === "job-busy") sub = p.tag ? "deploying" : "tagging";
+  const blocked = step.blocked === "missing-job" ? (p.tag ? "no-deploy-job" : "no-publish-job") : step.blocked || null;
+  return { stage: "merged", flow: null, sub, warnings, jobs: {}, prodPlan: { actions: step.action ? [step.action] : [], blocked } };
+}
+
+/** La tag de producción más antigua de una lista de nombres (la que despliega lo mínimo), o null. */
+function productionTag(names) {
+  const key = (n) => PRODUCTION_TAG.exec(n).slice(1).map(Number);
+  const tags = (names || []).filter((n) => PRODUCTION_TAG.test(n));
+  tags.sort((a, b) => {
+    const [x, y] = [key(a), key(b)];
+    return x[0] - y[0] || x[1] - y[1] || x[2] - y[2];
+  });
+  return tags[0] || null;
+}
+
 // Acción sobre un job según su estado: ▶ si espera, ↻ si falló o se canceló; si no, no se puede.
 function jobAction(job) {
   if (!job) return { blocked: "missing-job" };
@@ -74,6 +107,8 @@ function planToward(mr, info, target) {
   const from = STAGES.indexOf(info.stage);
   const actions = [];
   if (target <= from) return { actions, blocked: null };
+  // A "Sin producción" no se arrastra: se llega mergeando (botón Mergear de Probada).
+  if (target === 4) return { actions, blocked: "merge-first" };
   // Ya aprobada por mí pero faltan otras aprobaciones: un segundo Approve lo rechaza GitLab.
   if (target >= 1 && !mr.approved && !mr.approvedByMe) actions.push({ kind: "approve" });
   if (target >= 2 && from < 2) {
@@ -176,4 +211,4 @@ function groupTasks(mrs) {
   });
 }
 
-module.exports = { STAGES, FLOWS, mrStage, planToward, groupTasks, taskAndEpic, parseCitations, urlProject, isEpicUrl };
+module.exports = { STAGES, FLOWS, mrStage, planToward, groupTasks, taskAndEpic, parseCitations, urlProject, isEpicUrl, productionTag };

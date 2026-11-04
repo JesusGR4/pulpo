@@ -1,17 +1,21 @@
 "use strict";
 
-// Vista de Validación (solo GitLab): tablero Sin aprobar → Aprobada → En pruebas → Probada con las
-// tareas (y sus MRs) de los repos configurados. La columna la decide el main (src/validation-rules.js)
-// con el Approve de GitLab y los jobs de delivery-flow; una tarea va con su MR más atrasada.
-// Arrastrar hacia delante (o el botón del panel) abre SIEMPRE una confirmación con lo que se va a
-// ejecutar en GitLab, MR a MR y sin atomicidad; hacia atrás no se puede.
+// Vista de Validación (solo GitLab): tablero Sin aprobar → Aprobada → En pruebas → Probada → Sin
+// producción con las tareas (y sus MRs) de los repos configurados. La columna la decide el main
+// (src/validation-rules.js) con el Approve de GitLab, los jobs de delivery-flow y lo desplegado en
+// producción; una tarea va con su MR más atrasada. Arrastrar hacia delante abre SIEMPRE una
+// confirmación con lo que se va a ejecutar en GitLab, MR a MR y sin atomicidad; hacia atrás no se
+// puede, y a «Sin producción» solo se llega mergeando. El detalle (ficha y panel) está en
+// validation-detail.js.
 
 const VAL_STAGES = [
   { key: "unapproved", label: "Sin aprobar", ico: "circle-dashed", hint: "Código pendiente de revisión" },
   { key: "approved", label: "Aprobada", ico: "circle-check", hint: "Al soltar: Approve en GitLab" },
   { key: "testing", label: "En pruebas", ico: "flask-conical", hint: "Al soltar: Approve + aprobar-para-probar" },
   { key: "tested", label: "Probada", ico: "badge-check", hint: "Validada por QA · falta el merge" },
+  { key: "merged", label: "Sin producción", ico: "rocket", hint: "Mergeada · falta tag o desplegar en prod" },
 ];
+const VAL_LAST_DROP = 3; // «Probada»: a la 5ª columna no se arrastra
 
 const VAL_WARNINGS = {
   draft: "Draft",
@@ -21,6 +25,7 @@ const VAL_WARNINGS = {
   "deploy-failed": "el despliegue en dev falló",
   "validate-failed": "la validación de QA falló",
   "no-approve": "sin Approve",
+  "mx-pending": "falta prod MX",
 };
 
 const VAL_BLOCKED = {
@@ -31,9 +36,20 @@ const VAL_BLOCKED = {
   "job-busy": "el job ya está en marcha",
   "job-unavailable": "el job no se puede lanzar",
   "not-in-dev": "aún no está desplegada en dev",
+  "merge-first": "a «Sin producción» se llega mergeando",
+  checking: "aún comprobando su tag",
+  "no-publish-job": "su pipeline de development no ofrece publicar-tag-produccion",
+  "no-deploy-job": "la tag no tiene un despliegue a producción pendiente",
 };
 
-const VAL_SUB = { deploying: "desplegando", "in-dev": "en dev", "deploy-failed": "despliegue fallido" };
+const VAL_SUB = {
+  deploying: "desplegando",
+  "in-dev": "en dev",
+  "deploy-failed": "despliegue fallido",
+  checking: "comprobando",
+  "no-tag": "sin tag",
+  tagging: "publicando la tag",
+};
 
 let valDragKey = null;
 let valRun = 0; // id de la carga en curso: los parciales de una carga anterior se descartan
@@ -70,7 +86,12 @@ async function loadValidation() {
   try {
     const res = await window.monstro.validationBoard(runId);
     if (runId !== valRun) return;
-    if (v.selftestDetail) v.selected = [...res.cards].sort((a, b) => b.mrs.length - a.mrs.length)[0]?.mrs[0].key || null;
+    if (v.selftestDetail) {
+      // `validacion-detail` = ficha de una tarjeta de «Sin producción» (o la de más MRs); `-dock` = panel.
+      const pick = res.cards.find((c) => c.stage === "merged") || [...res.cards].sort((a, b) => b.mrs.length - a.mrs.length)[0];
+      v.selected = pick?.mrs[0].key || null;
+      v.mode = v.selftestDetail;
+    }
     v.loading = false;
     applyValBoard(res);
   } catch (err) {
@@ -107,6 +128,7 @@ function valCardHtml(card) {
         <span class="val-dot val-dot-${m.stage}" title="${esc(t(VAL_STAGES[m.stageIndex].label))}"></span>
         <span class="val-iid">!${m.iid}</span>
         <span class="val-repo">${esc(valProject(m.repo))}</span>
+        ${m.merged ? `<span class="val-mr-sub">${esc(valSubLabel(m))}</span>` : ""}
         ${m.warnings.length ? `<span class="val-mr-warn" title="${esc(m.warnings.map((w) => t(VAL_WARNINGS[w] || w)).join(" · "))}">${icon("triangle-alert")}</span>` : ""}
       </li>`,
     )
@@ -116,45 +138,6 @@ function valCardHtml(card) {
     <div class="val-card-title">${esc(card.title)}</div>
     <ul class="val-mrs">${mrs}</ul>
   </article>`;
-}
-
-function valDetailHtml(card) {
-  const idx = VAL_STAGES.findIndex((s) => s.key === card.stage);
-  const steps = VAL_STAGES.map((s, i) => `<li class="${i <= idx ? `on val-step-${card.stage}` : ""}"><span></span>${t(s.label)}</li>`).join("");
-  const job = (j) => (j ? `<span class="val-job val-job-${j.status}" title="${esc(j.status)}">${esc(j.name)}</span>` : "");
-  const mrs = card.mrs
-    .map((m) => {
-      const jobs = m.flow ? [m.flowJobs.gate, m.flowJobs.deploy, m.flowJobs.validate] : [];
-      return `<div class="val-dmr">
-        <div class="val-dmr-head">
-          <button class="val-link" data-url="${esc(m.url)}">!${m.iid}</button>
-          <span class="val-repo">${esc(valProject(m.repo))}</span>
-          <span class="val-stage val-stage-${m.stage}">${esc(t(VAL_STAGES[m.stageIndex].label))}${m.sub ? ` · ${esc(t(VAL_SUB[m.sub]))}` : ""}</span>
-        </div>
-        <div class="val-dmr-title">${esc(m.title)}</div>
-        <div class="val-dmr-meta">
-          <span>${icon("check")}${m.approvedBy.length ? esc(m.approvedBy.join(", ")) : t("sin Approve")}</span>
-          ${m.pipeline?.url ? `<button class="val-link" data-url="${esc(m.pipeline.url)}">${icon("workflow")}${t("pipeline")}</button>` : ""}
-          ${jobs.map(job).join("")}
-        </div>
-        ${m.warnings.length ? `<div class="val-dmr-warns">${valWarnings(m)}</div>` : ""}
-      </div>`;
-    })
-    .join("");
-  const next = idx < VAL_STAGES.length - 1 ? VAL_STAGES[idx + 1] : null;
-  const actions = [
-    next ? `<button class="btn btn-primary" id="val-next" data-target="${idx + 1}">${icon("arrow-right")}${t("Pasar a «{s}»", { s: t(next.label) })}</button>` : "",
-    card.mrs.some((m) => m.stage === "tested") ? `<button class="btn btn-primary" id="val-merge">${icon("git-merge")}${t("Mergear")}</button>` : "",
-    card.task ? `<button class="btn" id="val-task" data-url="${esc(card.task.url)}">${t("Abrir tarea")}</button>` : "",
-  ].join("");
-  return `<div class="val-detail-head">
-      <button class="icon-btn val-detail-close" id="val-close" title="${t("Cerrar")}">${icon("x")}</button>
-      <div class="val-detail-meta">${card.task ? `<span class="val-ref">${esc(valIssueRef(card.task.url))}</span>` : `<span class="val-loose">${t("Sin tarea")}</span>`}${card.epic ? `<span class="val-epic">${icon("layers")}${esc(card.epic.title)}</span>` : ""}</div>
-      <h2>${esc(card.title)}</h2>
-    </div>
-    <ol class="val-steps">${steps}</ol>
-    <div class="val-dmrs">${mrs}</div>
-    <div class="val-detail-actions">${actions}</div>`;
 }
 
 function renderValidation() {
@@ -180,32 +163,33 @@ function renderValidation() {
     : "";
   // Repintar entero resetea el scroll de cada columna: se guarda y se repone (llegan parciales cada ~0,7 s).
   const scrolls = [...list.querySelectorAll(".val-col-body")].map((el) => el.scrollTop);
-  list.innerHTML = `<div class="val-view">
+  const dock = v.mode === "dock" && valSelectedCard();
+  list.innerHTML = `<div class="val-view ${dock ? "has-dock" : ""}">
     <div class="val-head">
-      <div><h1>${t("Validación")}</h1><span class="muted">${t("{c} tarjetas · {m} MRs abiertas hacia development", { c: cards.length, m: nMrs })}</span></div>
+      <div><h1>${t("Validación")}</h1><span class="muted">${t("{c} tarjetas · {m} MRs", { c: cards.length, m: nMrs })}</span></div>
       ${linking}
       <button class="icon-btn" id="val-refresh" title="${t("Recargar")}" ${v.loading ? "disabled" : ""}>${icon("refresh-cw", v.loading ? "spin" : "")}</button>
     </div>
     ${errors}
-    <div class="val-layout">
-      <div class="val-board">${cols}</div>
-      ${valSelectedCard() ? `<aside class="val-detail">${valDetailHtml(valSelectedCard())}</aside>` : ""}
-    </div>
+    <div class="val-board">${cols}</div>
+    ${valOverlayHtml()}
   </div>`;
   list.querySelectorAll(".val-col-body").forEach((el, i) => (el.scrollTop = scrolls[i] || 0));
   wireValidation();
+  positionValPopover();
 }
 
 function wireValidation() {
   $("#val-refresh")?.addEventListener("click", () => loadValidation());
-  $("#val-close")?.addEventListener("click", () => {
-    state.validation.selected = null;
-    renderValidation();
-  });
-  list.querySelectorAll(".val-link, #val-task").forEach((b) => b.addEventListener("click", () => window.monstro.openExternal(b.dataset.url)));
+  wireValDetail();
+  list.querySelectorAll(".val-col-body").forEach((el) => el.addEventListener("scroll", positionValPopover, { passive: true }));
   list.querySelectorAll(".val-card").forEach((el) => {
     el.addEventListener("click", () => {
-      state.validation.selected = valCard(el.dataset.key)?.mrs[0].key || null;
+      const key = valCard(el.dataset.key)?.mrs[0].key || null;
+      const v = state.validation;
+      // Otro clic en la tarjeta ya abierta en ficha la cierra; en el panel de abajo, cambia de tarjeta.
+      v.selected = v.mode === "popover" && v.selected === key ? null : key;
+      if (v.mode !== "dock") v.mode = "popover";
       renderValidation();
     });
     el.addEventListener("dragstart", (event) => {
@@ -225,10 +209,10 @@ function wireValidation() {
   });
   list.querySelectorAll(".val-col").forEach((col) => {
     const target = VAL_STAGES.findIndex((s) => s.key === col.dataset.stage);
-    // Solo hacia delante: si la columna no es posterior, no se acepta el drop.
+    // Solo hacia delante y como mucho hasta «Probada»: a «Sin producción» se llega mergeando.
     const accepts = () => {
       const card = valCard(valDragKey);
-      return card && target > VAL_STAGES.findIndex((s) => s.key === card.stage);
+      return card && target <= VAL_LAST_DROP && target > VAL_STAGES.findIndex((s) => s.key === card.stage);
     };
     col.addEventListener("dragover", (event) => {
       if (!accepts()) return;
@@ -243,8 +227,6 @@ function wireValidation() {
       if (card) confirmValidationMove(card, target);
     });
   });
-  $("#val-next")?.addEventListener("click", (event) => confirmValidationMove(valSelectedCard(), Number(event.currentTarget.dataset.target)));
-  $("#val-merge")?.addEventListener("click", () => confirmValidationMerge(valSelectedCard()));
 }
 
 function valActionLabel(a, m) {

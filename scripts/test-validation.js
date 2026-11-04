@@ -125,4 +125,25 @@ assert.deepStrictEqual(parseCitations("Va con openhealthcareapi!881 y https://gl
   assert.strictEqual(byKey["dashboard!301"].stage, "tested");
 }
 
+// Sin producción: con tag → ▶ el deployment blocked de producción; sin tag → ▶ publicar-tag-produccion.
+{
+  const { productionTag } = require("../src/validation-rules");
+  const merged = (prod) => mrStage({ merged: true, prod });
+  const tagged = merged({ tag: "2026.11.3", deployJob: { id: 56462, name: "deploy", status: "manual" } });
+  assert.strictEqual(tagged.stage, "merged");
+  assert.strictEqual(tagged.sub, "tagged");
+  assert.deepStrictEqual(tagged.prodPlan.actions, [{ kind: "play", jobId: 56462, job: "deploy" }]);
+  const noTag = merged({ tag: null, publishJob: { id: 9, name: "publicar-tag-produccion", status: "manual" }, mxPending: true });
+  assert.strictEqual(noTag.sub, "no-tag");
+  assert.strictEqual(noTag.prodPlan.actions[0].job, "publicar-tag-produccion");
+  assert.ok(noTag.warnings.includes("mx-pending"));
+  assert.strictEqual(merged({ tag: null, publishJob: null }).prodPlan.blocked, "no-publish-job", "CI sin release_tag");
+  assert.strictEqual(merged({ tag: "2026.11.3", deployJob: { id: 1, name: "deploy", status: "running" } }).sub, "deploying");
+  // Arrastrar a Sin producción no hace nada: se llega mergeando.
+  assert.strictEqual(plan(mr({ approved: true, jobs: v2("success", "success", "success") }), 4).blocked, "merge-first");
+  // La tag más antigua que contiene el commit (orden numérico, sin las -mx).
+  assert.strictEqual(productionTag(["2026.11.10", "2026.11.3-mx", "2026.11.9", "rb/102026/x", "2026.10.11"]), "2026.10.11");
+  assert.strictEqual(productionTag(["2026.11.3-mx"]), null);
+}
+
 console.log("test-validation: ok");
