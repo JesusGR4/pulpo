@@ -1,7 +1,7 @@
 {
   "name": "monstro",
   "productName": "Monstro",
-  "version": "0.26.0",
+  "version": "0.27.0",
   "description": "GitHub PRs para Mac, estilo Bitbucket. Merge commit siempre, squash jamás.",
   "main": "src/main.js",
   "scripts": {
