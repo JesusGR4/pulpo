@@ -78,6 +78,7 @@ function paletteEntriesSections() {
   add("releases", t("Releases · Publicar"), t("crear tag + release"), () => enterReleases("publish"));
   add("releases", t("Releases · Pipelines"), t("estado de despliegue por proyecto"), () => enterReleases("pipelines"));
   add("entornos", t("Entornos"), t("salud de los entornos por proyecto"), () => enterEnvironments());
+  add("validacion", t("Validación"), t("tablero de MRs: aprobar, probar en dev y validar"), () => enterValidation());
   add("local", t("Trabajo local · Empezar tarea"), t("elegir Epic/Issue → plan → agentes"), () => enterLocal("empezar"));
   add("local", t("Trabajo local · Crear tarea"), t("Issue/Epic + MR desde local"), () => enterLocal("crear"));
   add("local", t("Trabajo local · Vincular tarea"), t("vincular local a una tarea existente"), () => enterLocal("vincular"));

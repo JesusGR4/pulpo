@@ -17,6 +17,7 @@
   <link rel="stylesheet" href="css/local.css" />
   <link rel="stylesheet" href="css/theme-glass.css" />
   <link rel="stylesheet" href="css/environments.css" />
+  <link rel="stylesheet" href="css/validation.css" />
   <link rel="stylesheet" href="css/cognito.css" />
   <link rel="stylesheet" href="css/proposals.css" />
   <link rel="stylesheet" href="css/sessions.css" />
@@ -69,6 +70,9 @@
       <div class="nav-group" data-tone="green">
         <div class="nav-section" data-i18n="Código">Código</div>
         <button class="bucket active" id="nav-prs-section" data-bucket="open" data-i18n="Merge requests"><svg class="ico ico-prs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><line x1="6" x2="6" y1="9" y2="21"/></svg>Merge requests <span class="count" id="count-open"></span></button>
+        <div id="nav-validacion-section">
+          <button class="bucket" id="bucket-validacion" data-i18n="Validación"><svg class="ico ico-validacion" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.85 8.62a4 4 0 0 1 4.78-4.77 4 4 0 0 1 6.74 0 4 4 0 0 1 4.78 4.78 4 4 0 0 1 0 6.74 4 4 0 0 1-4.77 4.78 4 4 0 0 1-6.75 0 4 4 0 0 1-4.78-4.77 4 4 0 0 1 0-6.76Z"/><path d="m16 9-5.5 5.5L8 12"/></svg>Validación</button>
+        </div>
         <div id="nav-historial-section">
           <button class="bucket" data-bucket="merged" data-i18n="Fusionadas"><svg class="ico ico-merged" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/></svg>Fusionadas</button>
           <button class="bucket" data-bucket="closed" data-i18n="Cerradas"><svg class="ico ico-closed" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/></svg>Cerradas</button>
@@ -163,6 +167,8 @@
   <script src="app/releases-publish.js"></script>
   <script src="app/releases-pipelines.js"></script>
   <script src="app/environments.js"></script>
+  <script src="app/validation.js"></script>
+  <script src="app/validation-detail.js"></script>
   <script src="app/cognito.js"></script>
   <script src="app/proposals.js"></script>
   <script src="app/markdown.js"></script>

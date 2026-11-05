@@ -76,6 +76,8 @@ const state = {
   // Vista de Entornos (solo GitLab): matriz proyecto × entorno. `data` = path de proyecto → entornos
   // (capa 1, GitLab). `health` = "path|entorno" → resultado de la sonda HTTP (capa 2, bajo demanda).
   environments: { projects: [], selected: new Set(), seeded: false, loading: false, data: new Map(), health: new Map(), probing: false },
+  // Tablero de Validación (solo GitLab): tarjetas (tarea + sus MRs) con su columna; `selected` = key de la tarjeta.
+  validation: { cards: null, errors: [], loading: false, selected: null, mode: "popover", tab: null },
   cognito: { profiles: [], pools: [], poolId: null, q: "", users: null, selected: null, user: null, userError: null, error: null, loading: false },
   prSnapshot: null, // nº → {reviewDecision, checks, reviewMe} para detectar cambios y notificar
   cursor: -1, // selección con teclado (j/k) en la lista
@@ -117,6 +119,7 @@ const BRANCH_RE = /^[\w./-]{1,200}$/;
 // bucket "Merge requests". Los grupos visuales (.nav-group) no son secciones: no se configuran.
 const MENU_SECTIONS = {
   prs:        { label: "Merge requests",     icon: "git-pull-request", navId: "nav-prs-section",        gitlabOnly: false },
+  validacion: { label: "Validación",         icon: "badge-check",      navId: "nav-validacion-section", gitlabOnly: true },
   historial:  { label: "Historial",          icon: "history",          navId: "nav-historial-section",  gitlabOnly: false },
   historico:  { label: "Histórico (grafo)",  icon: "git-graph",        navId: "nav-repo-section",       gitlabOnly: false },
   local:      { label: "Trabajo local",      icon: "chart-bar",        navId: "nav-local-section",      gitlabOnly: true },

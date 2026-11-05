@@ -101,7 +101,7 @@ function register(ctx) {
     if (Array.isArray(partial.sections)) {
       // Espejo de MENU_SECTIONS (renderer/app/core.js). Si añades una sección allí y no aquí, se
       // descarta en silencio al guardar — lo vigila scripts/test-sections-sync.js.
-      const SECTION_KEYS = ["prs", "historial", "historico", "milestones", "soporte", "releases", "entornos", "local", "propuestas", "usuarios"];
+      const SECTION_KEYS = ["prs", "validacion", "historial", "historico", "milestones", "soporte", "releases", "entornos", "local", "propuestas", "usuarios"];
       allowed.sections = partial.sections.filter((s) => SECTION_KEYS.includes(s));
     }
     if (partial.cognito && typeof partial.cognito === "object") {
