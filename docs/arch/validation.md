@@ -48,10 +48,18 @@ MR. Resultado por acción y recarga. «Mergear» (Probada) = `pr:merge` existent
 ## Sin producción (5ª columna, `pendingProduction` + `prodLookup`)
 
 MRs **mergeadas** a development que no están en prod ES, **sin límite de fecha**: el corte natural es lo
-desplegado. Por repo: último deployment `success` de `production` (y de `production-mx`) → `compare` desde ese
-sha hasta development → MRs mergeadas (GraphQL `mergedAfter` = fecha de ese commit − 1 día, paginado) cuyo
-`mergeCommitSha` esté en el compare. Un repo sin deployments en `production` (opensalud) no aporta nada. Sale
-de la columna al estar en prod ES; MX es solo aviso («falta prod MX»).
+desplegado. Por repo: último deployment `success` de `production` (y de `production-mx`) → `prodContext` →
+MRs mergeadas desde el **merge-base** de ese sha con development (GraphQL `mergedAfter`, paginado) → descarte
+con `rules.mrInProduction`. Un repo sin deployments en `production` (opensalud) no aporta nada. Sale de la
+columna al estar en prod ES; MX es solo aviso («falta prod MX»), con la misma regla.
+
+**GOTCHA: «su merge commit es ancestro de la tag» NO basta.** Hay tags cortadas de una rama `rb/` (landing
+2026.10.6 sale de `rb/102026`) a la que el código llega con OTRO sha. Una MR está en prod si su merge commit o
+todos sus commits están en la tag: tal cual, como origen de un cherry-pick `-x` (mensajes de los commits que
+solo tiene la tag) o, sin `-x`, el mismo cambio rebaseado (mismo autor y título en la historia de la tag;
+heurístico). Por lo mismo, la ventana es el merge-base y no la fecha del commit desplegado: la punta de una `rb/`
+es reciente y dejaría fuera lo mergeado en development después de cortarla. Coste extra: 2 compare + merge-base
++ historia por entorno y repo, y 1 REST (commits) por MR candidata.
 
 Paso de cada una (`prodStage`): `commits/:sha/refs?type=tag` → la tag `YYYY.MM.N` más antigua que la contiene.
 - Con tag → ▶ su job de producción = el deployment **`blocked`** de esa tag en `production`. **GOTCHA**: el

@@ -57,12 +57,40 @@ const MERGED_QUERY = `query($path: ID!, $after: Time, $cursor: String) {
   }
 }`;
 
+const DAY = 86400e3;
+
 /**
- * MRs mergeadas a development que NO están en producción ES: las que tienen su merge commit en el
- * `compare` entre lo desplegado en `production` y development. Sin límite de fecha: nada anterior a
- * lo desplegado puede estar pendiente, así que se piden las mergeadas desde (la fecha de) ese commit.
- * Un repo sin despliegues en `production` (opensalud) no aporta nada. Cada MR sale con `prod` a
- * medias ({ blockedByTag, mxPending }); `prodLookup` completa la tag y el ▶ después.
+ * Lo que hace falta para saber si una MR está en lo desplegado en `sha` (ver rules.mrInProduction):
+ * los commits de development que la tag NO tiene (`missing`), los cherry-picks `-x` de los commits que
+ * SOLO tiene la tag (`cherried`, el caso de una tag cortada de una rama `rb/`) y "autor|título" de la
+ * historia de la tag (`deployedTitles`, para el mismo cambio rebaseado sin `-x`). `base` = el
+ * merge-base con development: nada mergeado antes puede faltar.
+ */
+async function prodContext(id, sha) {
+  const [toDev, onlyTag, base] = await Promise.all([
+    api("GET", `/projects/${id}/repository/compare?from=${sha}&to=development`),
+    api("GET", `/projects/${id}/repository/compare?from=development&to=${sha}`),
+    api("GET", `/projects/${id}/repository/merge_base?refs[]=${sha}&refs[]=development`),
+  ]);
+  const missing = new Set((toDev?.commits || []).map((c) => c.id));
+  const cherried = rules.cherryOrigins((onlyTag?.commits || []).map((c) => c.message));
+  const deployedTitles = new Set();
+  // ponytail: historia de la tag desde 60 días antes del merge-base, tope 3 páginas (300 commits).
+  const since = new Date(Date.parse(base.committed_date) - 60 * DAY).toISOString();
+  for (let page = 1; page <= 3; page++) {
+    const list = await api("GET", `/projects/${id}/repository/commits?ref_name=${sha}&since=${since}&per_page=100&page=${page}`).catch(() => []);
+    for (const c of list || []) deployedTitles.add(`${c.author_email}|${c.title}`);
+    if (!list || list.length < 100) break;
+  }
+  return { missing, cherried, deployedTitles, baseDate: base.committed_date };
+}
+
+/**
+ * MRs mergeadas a development que NO están en producción ES (rules.mrInProduction: ancestro de la tag
+ * desplegada, cherry-pick o mismo cambio rebaseado). Sin límite de fecha: el corte es el merge-base de
+ * lo desplegado con development (si la tag sale de una `rb/`, el punto donde se cortó la rama), y nada
+ * mergeado antes puede faltar. Un repo sin despliegues en `production` (opensalud) no aporta nada.
+ * Cada MR sale con `prod` a medias ({ byTag, mxPending }); `prodLookup` completa la tag y el ▶ después.
  */
 async function pendingProduction(repo) {
   const id = proj(repo);
@@ -70,20 +98,18 @@ async function pendingProduction(repo) {
     (await api("GET", `/projects/${id}/deployments?environment=${env}&status=success&order_by=finished_at&sort=desc&per_page=1`).catch(() => []))[0] || null;
   const [es, mx] = await Promise.all([lastProd("production"), lastProd("production-mx")]);
   if (!es) return [];
-  const missing = async (sha) => new Set(((await api("GET", `/projects/${id}/repository/compare?from=${sha}&to=development`))?.commits || []).map((c) => c.id));
-  const [esMissing, mxMissing, deployed, waiting] = await Promise.all([
-    missing(es.sha),
-    mx ? missing(mx.sha).catch(() => null) : null,
-    api("GET", `/projects/${id}/repository/commits/${es.sha}`),
+  const [esCtx, mxCtx, waiting] = await Promise.all([
+    prodContext(id, es.sha),
+    mx ? prodContext(id, mx.sha).catch(() => null) : null,
     // El ▶ de producción de cada tag es su deployment `blocked` (o `running` si ya se pulsó): el nombre
     // del job cambia en cada proyecto (deploy, deploy:prod, deploy_production, deploy-nuxt…).
     Promise.all(["blocked", "running"].map((s) => api("GET", `/projects/${id}/deployments?environment=production&status=${s}&order_by=created_at&sort=desc&per_page=50`).catch(() => []))),
   ]);
-  if (!esMissing.size) return [];
+  if (!esCtx.missing.size) return [];
   const byTag = new Map();
   for (const d of waiting.flat()) if (d.deployable && !byTag.has(d.ref)) byTag.set(d.ref, { id: d.deployable.id, name: d.deployable.name, status: d.deployable.status });
-  // Un día de margen: la fecha del commit desplegado no es la de su merge.
-  const after = new Date(Date.parse(deployed.committed_date) - 86400e3).toISOString();
+  // Un día de margen: la fecha del commit no es la de su merge.
+  const after = new Date(Date.parse(esCtx.baseDate) - DAY).toISOString();
   const nodes = [];
   // ponytail: tope de 10 páginas (1000 MRs) por si producción llevase muchísimo sin desplegarse.
   for (let page = 0, cursor = null; page < 10; page++) {
@@ -92,28 +118,40 @@ async function pendingProduction(repo) {
     if (!conn?.pageInfo?.hasNextPage) break;
     cursor = conn.pageInfo.endCursor;
   }
-  return nodes
-    .filter((n) => n.mergeCommitSha && esMissing.has(n.mergeCommitSha))
-    .map((n) => ({
-      key: `${repo.split("/").pop()}!${n.iid}`,
-      repo,
-      iid: Number(n.iid),
-      title: n.title,
-      url: n.webUrl,
-      merged: true,
-      mergedAt: n.mergedAt,
-      mergeSha: n.mergeCommitSha,
-      draft: false,
-      approved: true,
-      approvedBy: (n.approvedBy?.nodes || []).map((u) => u.username),
-      author: n.author?.username || null,
-      branch: n.sourceBranch,
-      updatedAt: n.updatedAt,
-      citations: rules.parseCitations(n.description),
-      pipeline: null,
-      jobs: [],
-      prod: { tag: null, checked: false, mxPending: mxMissing ? mxMissing.has(n.mergeCommitSha) : false, byTag },
-    }));
+  // Candidatas: su merge commit no es ancestro de la tag. Para descartar las que llegaron por otro
+  // camino (cherry-pick, rebase) hacen falta sus commits: 1 REST por candidata.
+  const candidates = nodes.filter((n) => n.mergeCommitSha && esCtx.missing.has(n.mergeCommitSha));
+  const withCommits = await mapLimit(candidates, 8, async (n) => ({
+    n,
+    commits: (await api("GET", `/projects/${id}/merge_requests/${n.iid}/commits?per_page=100`).catch(() => [])) || [],
+  }));
+  const pending = withCommits.filter(({ n, commits }) => !rules.mrInProduction({ mergeSha: n.mergeCommitSha, commits }, esCtx));
+  return pending.map(({ n, commits }) => ({
+    ...mergedMr(repo, n),
+    prod: { tag: null, checked: false, mxPending: mxCtx ? !rules.mrInProduction({ mergeSha: n.mergeCommitSha, commits }, mxCtx) : false, byTag },
+  }));
+}
+
+function mergedMr(repo, n) {
+  return {
+    key: `${repo.split("/").pop()}!${n.iid}`,
+    repo,
+    iid: Number(n.iid),
+    title: n.title,
+    url: n.webUrl,
+    merged: true,
+    mergedAt: n.mergedAt,
+    mergeSha: n.mergeCommitSha,
+    draft: false,
+    approved: true,
+    approvedBy: (n.approvedBy?.nodes || []).map((u) => u.username),
+    author: n.author?.username || null,
+    branch: n.sourceBranch,
+    updatedAt: n.updatedAt,
+    citations: rules.parseCitations(n.description),
+    pipeline: null,
+    jobs: [],
+  };
 }
 
 // Tag de producción que ya contiene el merge (y su ▶ de prod) o, sin tag, el ▶ publicar-tag-produccion

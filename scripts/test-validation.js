@@ -146,4 +146,25 @@ assert.deepStrictEqual(parseCitations("Va con openhealthcareapi!881 y https://gl
   assert.strictEqual(productionTag(["2026.11.3-mx"]), null);
 }
 
+// ¿En producción? Casos reales de landing-profesionales con prod ES = 2026.10.6, cortada de rb/102026.
+{
+  const { mrInProduction, cherryOrigins } = require("../src/validation-rules");
+  const ctx = {
+    missing: new Set(["c69fcf97aa", "e4474031aa", "5fac9df8aa", "f00aa"]),
+    cherried: cherryOrigins(["Merge branch 'features/41-seo' into 'development'\n\n(cherry picked from commit c69fcf97aa)", "fix: otra cosa"]),
+    deployedTitles: new Set(["javier@x|fix(landing): un solo scroll al grid"]),
+  };
+  // !60: su merge commit se cherry-pickeó con -x a rb/102026.
+  assert.ok(mrInProduction({ mergeSha: "c69fcf97aa", commits: [{ id: "f00aa", title: "seo", author_email: "javier@x" }] }, ctx));
+  // !47: el mismo commit, rebaseado y sin -x (otro sha, mismo autor y título en la tag).
+  assert.ok(mrInProduction({ mergeSha: "b1", commits: [{ id: "e4474031aa", title: "fix(landing): un solo scroll al grid", author_email: "javier@x" }] }, ctx));
+  // Sus commits ya están en la tag tal cual (no salen en el compare).
+  assert.ok(mrInProduction({ mergeSha: "b2", commits: [{ id: "ya-en-la-tag", title: "x", author_email: "javier@x" }] }, ctx));
+  // !62: mergeada después del corte de la rb, sin rastro en la tag → pendiente.
+  assert.ok(!mrInProduction({ mergeSha: "5fac9df8aa", commits: [{ id: "5fac9df8aa", title: "ci: delivery-flow", author_email: "javier@x" }] }, ctx));
+  // Mismo título de OTRO autor no vale; sin commits conocidos, tampoco.
+  assert.ok(!mrInProduction({ mergeSha: "b3", commits: [{ id: "e4474031aa", title: "fix(landing): un solo scroll al grid", author_email: "otra@x" }] }, ctx));
+  assert.ok(!mrInProduction({ mergeSha: "b4", commits: [] }, ctx));
+}
+
 console.log("test-validation: ok");

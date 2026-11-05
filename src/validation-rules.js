@@ -77,6 +77,29 @@ function prodStage(mr) {
   return { stage: "merged", flow: null, sub, warnings, jobs: {}, prodPlan: { actions: step.action ? [step.action] : [], blocked } };
 }
 
+/**
+ * ¿Está ya en producción una MR mergeada cuyo merge commit NO es ancestro de la tag desplegada? Pasa
+ * cuando la tag sale de una rama de release (`rb/102026`) a la que el código llegó con OTRO sha:
+ *  - cherry-pick con `-x` de su merge commit o de sus commits (`cherried`: los "cherry picked from
+ *    commit X" de los commits que solo están en la tag);
+ *  - commits que la tag ya contiene tal cual (no están en `missing`, el compare tag..development);
+ *  - el mismo commit rebaseado o cherry-pickeado sin `-x`: mismo autor y título en la historia de la
+ *    tag (`deployedTitles`, claves "email|título").
+ * ponytail: lo último es heurístico (dos commits distintos con mismo título y autor contarían como
+ * uno); la alternativa exacta sería comparar el patch-id, que la API de GitLab no da.
+ */
+function mrInProduction(mr, { missing, cherried, deployedTitles }) {
+  const picked = (sha) => cherried.some((c) => sha.startsWith(c));
+  if (picked(mr.mergeSha)) return true;
+  const commits = mr.commits || [];
+  return commits.length > 0 && commits.every((c) => !missing.has(c.id) || picked(c.id) || deployedTitles.has(`${c.author_email}|${c.title}`));
+}
+
+/** Los shas de origen de los cherry-picks (`-x`) citados en unos mensajes de commit. */
+function cherryOrigins(messages) {
+  return messages.flatMap((msg) => [...String(msg || "").matchAll(/cherry picked from commit ([0-9a-f]{7,40})/g)].map((m) => m[1]));
+}
+
 /** La tag de producción más antigua de una lista de nombres (la que despliega lo mínimo), o null. */
 function productionTag(names) {
   const key = (n) => PRODUCTION_TAG.exec(n).slice(1).map(Number);
@@ -211,4 +234,4 @@ function groupTasks(mrs) {
   });
 }
 
-module.exports = { STAGES, FLOWS, mrStage, planToward, groupTasks, taskAndEpic, parseCitations, urlProject, isEpicUrl, productionTag };
+module.exports = { STAGES, FLOWS, mrStage, planToward, groupTasks, taskAndEpic, parseCitations, urlProject, isEpicUrl, productionTag, mrInProduction, cherryOrigins };
