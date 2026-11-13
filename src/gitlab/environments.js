@@ -23,6 +23,11 @@ const TIER_RANK = { development: 0, testing: 1, staging: 2, production: 3, other
  * último despliegue con `status=success`, así que filtramos por eso EN LA API (no en cliente: el
  * success real puede estar decenas de deployments más abajo). Si no hay ninguno → "Sin despliegues".
  *
+ * GOTCHA 3 (13-nov, launcher !1044): "último" = el que TERMINÓ último (`order_by=finished_at`), no el creado
+ * último. GitLab crea el registro al crearse el pipeline; un `desplegar-en-dev` manual pulsado días después
+ * conserva ese `created_at`, y ordenando por él aparecía por debajo de otra MR creada después aunque la
+ * pisara en dev. Comprobado en 33 entornos de 7 proyectos: solo cambia el caso roto.
+ *
  * Coste: 1 + M llamadas por proyecto (M = entornos), las M en paralelo. Pensado para refresco bajo
  * demanda, NO para el poll. NO lanza por entorno: un fallo deja ese entorno sin deploy, no tumba la fila.
  */
@@ -39,7 +44,7 @@ async function projectEnvironments(projectId) {
       try {
         const ds = await api(
           "GET",
-          `/projects/${id}/deployments?environment=${encodeURIComponent(e.name)}&status=success&order_by=created_at&sort=desc&per_page=1`,
+          `/projects/${id}/deployments?environment=${encodeURIComponent(e.name)}&status=success&order_by=finished_at&sort=desc&per_page=1`,
         );
         const d = (ds || [])[0];
         if (d) {
@@ -47,7 +52,8 @@ async function projectEnvironments(projectId) {
             status: d.status, // siempre "success" (lo filtra la query); lo dejamos por claridad
             ref: d.ref || null,
             sha: d.sha ? String(d.sha).slice(0, 8) : null,
-            createdAt: d.created_at || null,
+            // El JSON no trae `finished_at`; `updated_at` de un despliegue con éxito es cuando terminó el job.
+            deployedAt: d.finished_at || d.updated_at || null,
             user: d.user?.name || null,
             pipelineUrl: d.deployable?.pipeline?.web_url || null,
           };

@@ -131,8 +131,8 @@ async function probeEnvHealth() {
 // bien pero hace demasiado: ámbar, porque un entorno congelado meses suele ser un olvido, no una virtud.
 function deployVerdict(deployment, staleDays) {
   if (!deployment) return { cls: "none", ico: "·", label: t("Sin despliegues") };
-  const days = deployment.createdAt ? (Date.now() - new Date(deployment.createdAt).getTime()) / 86400000 : 0;
-  if (deployment.createdAt && days > staleDays) return { cls: "stale", ico: icon("check"), label: t("Desplegado hace mucho") };
+  const days = deployment.deployedAt ? (Date.now() - new Date(deployment.deployedAt).getTime()) / 86400000 : 0;
+  if (deployment.deployedAt && days > staleDays) return { cls: "stale", ico: icon("check"), label: t("Desplegado hace mucho") };
   return { cls: "ok", ico: icon("check"), label: t("Desplegado correctamente") };
 }
 
@@ -207,7 +207,7 @@ function envCellHtml(path, env, staleDays) {
   const d = env.deployment;
   const refText = slot?.branch || d?.ref;
   const ref = refText ? `<code class="env-ref">${esc(refText)}</code>` : `<span class="env-ref muted">—</span>`;
-  const when = d?.createdAt ? timeAgo(d.createdAt) : "";
+  const when = d?.deployedAt ? timeAgo(d.deployedAt) : "";
   const tip = [
     v.label,
     slot?.mr ? `!${slot.mr.iid} ${slot.mr.title}${slot.mr.author ? ` (${slot.mr.author})` : ""}` : "",

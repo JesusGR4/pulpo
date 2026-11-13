@@ -11,6 +11,8 @@ environment. **Two independent layers per cell, and neither replaces the other**
 
 **GOTCHA (verified against the live instance): `GET /projects/:id/environments` does NOT return `last_deployment`** — only the single-environment detail does. So instead of N detail calls it issues one `/deployments?environment=<name>&order_by=created_at&sort=desc&per_page=5` per environment, which costs the same AND lets it skip the `skipped` noise (feature branches that trigger the deploy job without deploying).
 
+**GOTCHA (13-nov, launcher !1044): "last" = the one that FINISHED last (`status=success&order_by=finished_at&per_page=1`), not the one created last.** GitLab creates the deployment record when the pipeline is created and only updates it when the job ends, so a manual `desplegar-en-dev` played days later keeps the pipeline's old `created_at` and ranked below a newer MR that dev no longer runs (Entornos showed !1043 while dev served !1044). The JSON has no `finished_at`, so the deploy time shown (`deployment.deployedAt`) is `updated_at`. Same order as delivery-flow's `dev-slot.cjs` (`updated_at`). Checked on 33 environments of 7 projects: only that case changed. Guard: `node scripts/test-env-deployments.js`.
+
 Cost = **1 + M calls per project** (M = environments), M in parallel; projects run through a fixed **pool of 4** (`ENV_CONCURRENCY`) — on-demand refresh only, **never on the poll**.
 
 Cell verdict (`deployVerdict`): failed/canceled → red, running/created/blocked → accent, success older than `staleDays` (default 45) → **stale/amber**, else green.
